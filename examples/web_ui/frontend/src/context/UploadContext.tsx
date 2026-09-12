@@ -160,7 +160,7 @@ function reducer(state: UploadTask[], action: Action): UploadTask[] {
 }
 
 function newTaskId(): string {
-	if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
 		return crypto.randomUUID();
 	}
 	return `upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;

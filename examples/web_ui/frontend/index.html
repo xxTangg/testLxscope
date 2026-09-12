@@ -6,6 +6,40 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>龙信助手</title>
 		<script>
+			// crypto.randomUUID() is restricted to secure contexts in browsers.
+			// Install the fallback before any ES modules load so dependencies that
+			// call crypto.randomUUID() directly also work when served over HTTP.
+			(() => {
+				const cryptoApi = globalThis.crypto;
+				if (!cryptoApi || typeof cryptoApi.randomUUID === 'function') return;
+
+				const randomUUID = () => {
+					const bytes = new Uint8Array(16);
+					if (typeof cryptoApi.getRandomValues === 'function') {
+						cryptoApi.getRandomValues(bytes);
+					} else {
+						for (let index = 0; index < bytes.length; index += 1) {
+							bytes[index] = Math.floor(Math.random() * 256);
+						}
+					}
+					bytes[6] = (bytes[6] & 0x0f) | 0x40;
+					bytes[8] = (bytes[8] & 0x3f) | 0x80;
+					const hex = Array.from(bytes, (byte) =>
+						byte.toString(16).padStart(2, '0'),
+					).join('');
+					return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+						12,
+						16,
+					)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+				};
+
+				Object.defineProperty(cryptoApi, 'randomUUID', {
+					configurable: true,
+					value: randomUUID,
+				});
+			})();
+		</script>
+		<script>
 			// Applied before the first paint, so the theme never flashes.
 			const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 			const applyTheme = () =>
