@@ -59,6 +59,7 @@ import { useWorkspace } from '@/hooks/useWorkspace.ts';
 import { useWorkspaceStatus } from '@/hooks/useWorkspaceStatus';
 import { useTranslation } from '@/i18n/useI18n';
 import { formatApiErrorForAlert } from '@/lib/api-error';
+import { createUuid } from '@/utils/uuid';
 
 interface ChatViewportProps {
 	/**
@@ -578,7 +579,7 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 				try {
 					const parsed = await chatApi.parseAttachment(file);
 					return {
-						id: crypto.randomUUID(),
+						id: createUuid(),
 						type: 'text' as const,
 						text: `[File: ${file.name}]\n${parsed.text}`,
 						created_at: new Date().toISOString(),
@@ -592,7 +593,7 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 			const filePath = (file as File & { path?: string }).path;
 			if (filePath) {
 				return {
-					id: crypto.randomUUID(),
+					id: createUuid(),
 					type: 'data' as const,
 					source: {
 						type: 'url' as const,
@@ -606,7 +607,7 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 			if (file.type === 'text/plain') {
 				const text = await file.text();
 				return {
-					id: crypto.randomUUID(),
+					id: createUuid(),
 					type: 'text' as const,
 					text: `[File: ${file.name}]\n${text}`,
 					created_at: new Date().toISOString(),
@@ -619,7 +620,7 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 				binary += String.fromCharCode(bytes[index]);
 			}
 			return {
-				id: crypto.randomUUID(),
+				id: createUuid(),
 				type: 'data' as const,
 				source: {
 					type: 'base64' as const,

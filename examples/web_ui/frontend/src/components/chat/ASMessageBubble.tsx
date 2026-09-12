@@ -17,6 +17,7 @@ import {
 	CirclePlay,
 	Copy,
 	Download,
+	Eye,
 	FileText,
 	FileVideo2,
 	Loader2,
@@ -49,6 +50,13 @@ import {
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible.tsx';
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+} from '@/components/ui/dialog.tsx';
 import { Message, MessageFooter, MessageContent } from '@/components/ui/message';
 import { useAudioBlock, useReplayController } from '@/context/AudioContext';
 import { useTranslation } from '@/i18n/useI18n';
@@ -413,12 +421,99 @@ interface WorkspaceDownloadContext {
 // of DataBlocks. Restrict recognition to the service workspace tree and known
 // file extensions so ordinary prose containing slashes remains untouched.
 const WORKSPACE_FILE_PATH =
-	/(?:file:\/\/)?(\/app\/examples\/agent_service\/workspaces\/[^\r\n`"'<>]*?\.(?:tar\.gz|pdf|docx?|xlsx?|pptx?|csv|tsv|txt|md|json|ya?ml|xml|zip|png|jpe?g|gif|webp|svg|mp3|wav|m4a|mp4|mov|avi))/giu;
+	/(?:file:\/\/)?(\/app\/examples\/agent_service\/workspaces\/[^\r\n`"'<>]*?\.(?:tar\.gz|pdf|docx?|xlsx?|pptx?|csv|tsv|txt|md|json|ya?ml|xml|zip|html?|png|jpe?g|gif|webp|svg|mp3|wav|m4a|mp4|mov|avi))/giu;
 
 function workspaceFilePaths(text: string): string[] {
 	const paths = new Set<string>();
 	for (const match of text.matchAll(WORKSPACE_FILE_PATH)) paths.add(match[1]);
 	return [...paths];
+}
+
+function isHtmlWorkspaceFile(path: string): boolean {
+	return /\.(?:html|htm)$/iu.test(path);
+}
+
+function HtmlPreviewDialog({
+	path,
+	context,
+	open,
+	onOpenChange,
+}: {
+	path: string | null;
+	context: WorkspaceDownloadContext;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+	const [loading, setLoading] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (!open || !path) {
+			setPreviewUrl(null);
+			setLoading(false);
+			setError(null);
+			return;
+		}
+
+		let cancelled = false;
+		setPreviewUrl(null);
+		setError(null);
+		setLoading(true);
+		workspaceApi.files
+			.previewUrl(context.agentId, context.sessionId, path)
+			.then((url) => {
+				if (!cancelled) setPreviewUrl(url);
+			})
+			.catch((err) => {
+				if (!cancelled) setError((err as Error).message || String(err));
+			})
+			.finally(() => {
+				if (!cancelled) setLoading(false);
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [open, path, context.agentId, context.sessionId]);
+
+	const filename = path?.split('/').pop() || t('messageBubble.previewHtmlTitle');
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="flex h-[85vh] w-[95vw] !max-w-[1200px] flex-col gap-3">
+				<DialogHeader>
+					<DialogTitle className="truncate pr-8">{filename}</DialogTitle>
+					<DialogDescription>{t('messageBubble.previewHtmlDescription')}</DialogDescription>
+				</DialogHeader>
+				<div className="min-h-0 flex-1 overflow-hidden rounded-md border bg-white">
+					{loading && (
+						<div className="text-muted-foreground flex h-full items-center justify-center gap-2 text-sm">
+							<Loader2 className="size-4 animate-spin" />
+							{t('messageBubble.previewLoading')}
+						</div>
+					)}
+					{error && (
+						<div className="text-destructive flex h-full items-center justify-center p-4 text-sm">
+							{t('messageBubble.previewFailed')}: {error}
+						</div>
+					)}
+					{previewUrl && !error && (
+						<iframe
+							src={previewUrl}
+							title={filename}
+							className="h-full w-full border-0"
+							referrerPolicy="no-referrer"
+							// Keep generated scripts inside an opaque origin so they cannot
+							// access the parent application or its authenticated storage.
+							sandbox="allow-scripts"
+						/>
+					)}
+				</div>
+			</DialogContent>
+		</Dialog>
+	);
 }
 
 function WorkspaceFileDownloads({
@@ -430,6 +525,7 @@ function WorkspaceFileDownloads({
 }) {
 	const { t } = useTranslation();
 	const [downloading, setDownloading] = useState<string | null>(null);
+	const [previewPath, setPreviewPath] = useState<string | null>(null);
 	const paths = workspaceFilePaths(text);
 
 	if (paths.length === 0) return null;
@@ -454,8 +550,9 @@ function WorkspaceFileDownloads({
 	};
 
 	return (
-		<AttachmentGroup className="mt-2 max-w-full">
-			{paths.map((path) => {
+		<>
+			<AttachmentGroup className="mt-2 max-w-full">
+				{paths.map((path) => {
 				const filename = path.split('/').pop() || path;
 				const busy = downloading === path;
 				return (
@@ -470,6 +567,16 @@ function WorkspaceFileDownloads({
 							</AttachmentDescription>
 						</AttachmentContent>
 						<AttachmentActions>
+							{isHtmlWorkspaceFile(path) && (
+								<AttachmentAction
+									type="button"
+									title={t('messageBubble.previewFile')}
+									aria-label={t('messageBubble.previewFile')}
+									onClick={() => setPreviewPath(path)}
+								>
+									<Eye />
+								</AttachmentAction>
+							)}
 							<AttachmentAction
 								type="button"
 								disabled={downloading !== null}
@@ -482,8 +589,17 @@ function WorkspaceFileDownloads({
 						</AttachmentActions>
 					</Attachment>
 				);
-			})}
-		</AttachmentGroup>
+				})}
+			</AttachmentGroup>
+			<HtmlPreviewDialog
+				path={previewPath}
+				context={context}
+				open={previewPath !== null}
+				onOpenChange={(open) => {
+					if (!open) setPreviewPath(null);
+				}}
+			/>
+		</>
 	);
 }
 

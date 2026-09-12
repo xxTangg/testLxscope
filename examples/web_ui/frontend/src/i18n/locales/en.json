@@ -114,6 +114,11 @@
 		"pauseAudio": "Pause audio",
 		"workspaceFile": "Workspace file",
 		"downloadFile": "Download file",
+		"previewFile": "Preview HTML",
+		"previewHtmlTitle": "HTML preview",
+		"previewHtmlDescription": "The content runs inside an isolated browser frame.",
+		"previewLoading": "Loading preview…",
+		"previewFailed": "Could not load HTML preview",
 		"running": "Running...",
 		"executionTrace": "Execution trace ({{count}} items)",
 		"hintSource": {

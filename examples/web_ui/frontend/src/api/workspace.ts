@@ -19,6 +19,32 @@ export interface UploadOptions {
 }
 
 /**
+ * Mint a short-lived capability URL for a workspace file.
+ *
+ * Browser-native navigations such as downloads and iframes cannot attach the
+ * normal Authorization header, so both flows use the same path-bound token.
+ */
+async function workspaceFileUrl(
+	agentId: string,
+	sessionId: string,
+	path: string,
+	download: boolean,
+) {
+	const { token } = await client.post<WorkspaceDownloadTokenResponse>(
+		'/workspace/files/download-token',
+		undefined,
+		{ agent_id: agentId, session_id: sessionId, path },
+	);
+	const url = new URL('/workspace/files', getBaseUrl());
+	url.searchParams.set('agent_id', agentId);
+	url.searchParams.set('session_id', sessionId);
+	url.searchParams.set('path', path);
+	url.searchParams.set('download', String(download));
+	url.searchParams.set('token', token);
+	return url.toString();
+}
+
+/**
  * XHR-based folder upload — `fetch` surfaces no byte-level send
  * progress, so anything driving a progress bar has to use XHR.
  *
@@ -134,20 +160,11 @@ export const workspaceApi = {
 
 	files: {
 		/** Mint a path-bound token and build a browser-native download URL. */
-		downloadUrl: async (agentId: string, sessionId: string, path: string) => {
-			const { token } = await client.post<WorkspaceDownloadTokenResponse>(
-				'/workspace/files/download-token',
-				undefined,
-				{ agent_id: agentId, session_id: sessionId, path },
-			);
-			const url = new URL('/workspace/files', getBaseUrl());
-			url.searchParams.set('agent_id', agentId);
-			url.searchParams.set('session_id', sessionId);
-			url.searchParams.set('path', path);
-			url.searchParams.set('download', 'true');
-			url.searchParams.set('token', token);
-			return url.toString();
-		},
+		downloadUrl: (agentId: string, sessionId: string, path: string) =>
+			workspaceFileUrl(agentId, sessionId, path, true),
+		/** Mint a path-bound token and build an inline browser preview URL. */
+		previewUrl: (agentId: string, sessionId: string, path: string) =>
+			workspaceFileUrl(agentId, sessionId, path, false),
 	},
 
 	mcp: {

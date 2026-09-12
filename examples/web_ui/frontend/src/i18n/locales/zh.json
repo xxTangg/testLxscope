@@ -114,6 +114,11 @@
 		"pauseAudio": "暂停音频",
 		"workspaceFile": "工作区文件",
 		"downloadFile": "下载文件",
+		"previewFile": "预览 HTML",
+		"previewHtmlTitle": "HTML 预览",
+		"previewHtmlDescription": "内容将在隔离的浏览器框架中运行。",
+		"previewLoading": "正在加载预览…",
+		"previewFailed": "HTML 预览加载失败",
 		"running": "运行中...",
 		"executionTrace": "执行过程（{{count}} 项）",
 		"hintSource": {
