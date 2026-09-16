@@ -41,6 +41,10 @@ import { useAuth } from '@/hooks/useAuth';
 import i18n from '@/i18n';
 import { useTranslation } from '@/i18n/useI18n';
 
+const iconButtonClassName =
+	'h-auto! min-h-12! flex-col! justify-center! gap-0.5! p-1! text-[10px] leading-3';
+const iconLabelClassName = 'max-w-full text-center text-[9px] leading-3 whitespace-normal!';
+
 export function AppSidebar() {
 	const navigate = useNavigate();
 	const location = useLocation();
@@ -89,9 +93,10 @@ export function AppSidebar() {
 										location.pathname.startsWith('/chat/')
 									}
 									onClick={() => navigate('/chat')}
-									className="justify-center"
+									className={iconButtonClassName}
 								>
 									<BotMessageSquare />
+									<span className={iconLabelClassName}>{t('common.chat')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
@@ -99,9 +104,12 @@ export function AppSidebar() {
 									tooltip={{ children: t('common.schedule'), hidden: false }}
 									isActive={location.pathname === '/schedule'}
 									onClick={() => navigate('/schedule')}
-									className="justify-center"
+									className={iconButtonClassName}
 								>
 									<Calendars />
+									<span className={iconLabelClassName}>
+										{t('common.schedule')}
+									</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
@@ -109,9 +117,12 @@ export function AppSidebar() {
 									tooltip={{ children: t('common.channel'), hidden: false }}
 									isActive={location.pathname === '/channel'}
 									onClick={() => navigate('/channel')}
-									className="px-2"
+									className={iconButtonClassName}
 								>
 									<Cable />
+									<span className={iconLabelClassName}>
+										{t('common.channel')}
+									</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 						</SidebarMenu>
@@ -125,9 +136,12 @@ export function AppSidebar() {
 									tooltip={{ children: t('common.credential'), hidden: false }}
 									isActive={location.pathname === '/credential'}
 									onClick={() => navigate('/credential')}
-									className="justify-center"
+									className={iconButtonClassName}
 								>
 									<KeyRound />
+									<span className={iconLabelClassName}>
+										{t('common.credential')}
+									</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
@@ -136,9 +150,12 @@ export function AppSidebar() {
 									// Stays lit while browsing a hub under /mcp/:hubId.
 									isActive={location.pathname.startsWith('/mcp')}
 									onClick={() => navigate('/mcp')}
-									className="justify-center"
+									className={iconButtonClassName}
 								>
 									<MCPSvg />
+									<span className={iconLabelClassName}>
+										{t('common.mcp-hub')}
+									</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
@@ -146,9 +163,12 @@ export function AppSidebar() {
 									tooltip={{ children: t('common.skill-hub'), hidden: false }}
 									isActive={location.pathname.startsWith('/skill')}
 									onClick={() => navigate('/skill')}
-									className="justify-center"
+									className={iconButtonClassName}
 								>
 									<BookText />
+									<span className={iconLabelClassName}>
+										{t('common.skill-hub')}
+									</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
@@ -156,9 +176,12 @@ export function AppSidebar() {
 									tooltip={{ children: t('common.knowledge'), hidden: false }}
 									isActive={location.pathname === '/knowledge'}
 									onClick={() => navigate('/knowledge')}
-									className="justify-center"
+									className={iconButtonClassName}
 								>
 									<LibraryBig />
+									<span className={iconLabelClassName}>
+										{t('common.knowledge')}
+									</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 						</SidebarMenu>
@@ -176,9 +199,12 @@ export function AppSidebar() {
 										hidden: false,
 									}}
 									isActive={location.pathname === '/account'}
-									className="justify-center"
+									className={iconButtonClassName}
 								>
 									<UserRound />
+									<span className={iconLabelClassName}>
+										{t('auth.accountCenter')}
+									</span>
 								</SidebarMenuButton>
 							</DropdownMenuTrigger>
 							<DropdownMenuContent side="right" align="end" className="min-w-52">
@@ -223,18 +249,20 @@ export function AppSidebar() {
 								hidden: false,
 							}}
 							onClick={handleToggleLanguage}
-							className="justify-center"
+							className={iconButtonClassName}
 						>
 							<Languages />
+							<span className={iconLabelClassName}>{t('common.language')}</span>
 						</SidebarMenuButton>
 					</SidebarMenuItem>
 					<SidebarMenuItem>
 						<SidebarMenuButton
 							tooltip={{ children: t('tour.trigger'), hidden: false }}
 							onClick={handleStartTour}
-							className="justify-center"
+							className={iconButtonClassName}
 						>
 							<Compass />
+							<span className={iconLabelClassName}>{t('tour.trigger')}</span>
 						</SidebarMenuButton>
 					</SidebarMenuItem>
 				</SidebarMenu>

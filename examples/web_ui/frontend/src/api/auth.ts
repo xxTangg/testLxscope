@@ -12,6 +12,17 @@ export interface LoginResponse {
 	user: AuthUser;
 }
 
+export interface DailyTokenUsage {
+	date: string;
+	input_tokens: number;
+	output_tokens: number;
+	cache_input_tokens: number;
+	cache_creation_input_tokens: number;
+	total_tokens: number;
+	message_count: number;
+	session_count: number;
+}
+
 export interface TokenUsage {
 	input_tokens: number;
 	output_tokens: number;
@@ -20,6 +31,7 @@ export interface TokenUsage {
 	total_tokens: number;
 	message_count: number;
 	session_count: number;
+	daily: DailyTokenUsage[];
 }
 
 async function authenticate(

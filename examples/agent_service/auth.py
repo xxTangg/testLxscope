@@ -55,6 +55,19 @@ class LoginResponse(BaseModel):
     user: AuthUser
 
 
+class DailyTokenUsageResponse(BaseModel):
+    """Aggregate model token usage for one calendar day."""
+
+    date: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    total_tokens: int = 0
+    message_count: int = 0
+    session_count: int = 0
+
+
 class TokenUsageResponse(BaseModel):
     """Aggregate model token usage for the current user."""
 
@@ -65,6 +78,7 @@ class TokenUsageResponse(BaseModel):
     total_tokens: int = 0
     message_count: int = 0
     session_count: int = 0
+    daily: list[DailyTokenUsageResponse] = Field(default_factory=list)
 
 
 class _StoredAccount(BaseModel):
@@ -327,24 +341,71 @@ class JWTAuthService:
     async def get_token_usage(self, user_id: str) -> TokenUsageResponse:
         client = self._redis()
         result = TokenUsageResponse()
+        daily: dict[str, dict[str, Any]] = {}
         pattern = f"agentscope:user:{user_id}:session:*:messages"
         async for key in client.scan_iter(match=pattern, count=100):
+            session_id = key
             result.session_count += 1
             for raw in await client.lrange(key, 0, -1):
                 try:
-                    usage = json.loads(raw).get("usage")
+                    message = json.loads(raw)
+                    usage = message.get("usage")
                 except (json.JSONDecodeError, AttributeError):
                     continue
                 if not isinstance(usage, dict):
                     continue
                 result.message_count += 1
-                result.input_tokens += int(usage.get("input_tokens") or 0)
-                result.output_tokens += int(usage.get("output_tokens") or 0)
-                result.cache_input_tokens += int(usage.get("cache_input_tokens") or 0)
-                result.cache_creation_input_tokens += int(
+                input_tokens = int(usage.get("input_tokens") or 0)
+                output_tokens = int(usage.get("output_tokens") or 0)
+                cache_input_tokens = int(usage.get("cache_input_tokens") or 0)
+                cache_creation_input_tokens = int(
                     usage.get("cache_creation_input_tokens") or 0,
                 )
+                result.input_tokens += input_tokens
+                result.output_tokens += output_tokens
+                result.cache_input_tokens += cache_input_tokens
+                result.cache_creation_input_tokens += cache_creation_input_tokens
+
+                created_at = message.get("created_at")
+                if not isinstance(created_at, str):
+                    continue
+                try:
+                    usage_date = datetime.fromisoformat(
+                        created_at.replace("Z", "+00:00"),
+                    ).date().isoformat()
+                except ValueError:
+                    continue
+                bucket = daily.setdefault(
+                    usage_date,
+                    {
+                        "session_ids": set(),
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "message_count": 0,
+                    },
+                )
+                bucket["session_ids"].add(session_id)
+                bucket["input_tokens"] += input_tokens
+                bucket["output_tokens"] += output_tokens
+                bucket["cache_input_tokens"] += cache_input_tokens
+                bucket["cache_creation_input_tokens"] += cache_creation_input_tokens
+                bucket["message_count"] += 1
         result.total_tokens = result.input_tokens + result.output_tokens
+        result.daily = [
+            DailyTokenUsageResponse(
+                date=usage_date,
+                input_tokens=bucket["input_tokens"],
+                output_tokens=bucket["output_tokens"],
+                cache_input_tokens=bucket["cache_input_tokens"],
+                cache_creation_input_tokens=bucket["cache_creation_input_tokens"],
+                total_tokens=bucket["input_tokens"] + bucket["output_tokens"],
+                message_count=bucket["message_count"],
+                session_count=len(bucket["session_ids"]),
+            )
+            for usage_date, bucket in sorted(daily.items(), reverse=True)
+        ]
         return result
 
     @staticmethod
