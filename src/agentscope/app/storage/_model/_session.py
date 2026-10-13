@@ -60,6 +60,12 @@ class ChannelOrigin(BaseModel):
     because the name arrives with the inbound message: a node that never
     holds the connection cannot look it up."""
 
+    channel_user_id: str | None = None
+    """The platform user who opened the session, when the platform named
+    one. Channels whose tools act with the sender's own permissions read
+    it to bind those tools; ``None`` on sessions created before it was
+    recorded."""
+
 
 class TeamOrigin(BaseModel):
     """A session a team minted for one of its members.
@@ -73,13 +79,31 @@ class TeamOrigin(BaseModel):
     type: Literal["team"] = "team"
 
 
+class SOPOrigin(BaseModel):
+    """A session a SOP run opened to hold one of its conversations."""
+
+    type: Literal["sop"] = "sop"
+
+    sop_run_id: str
+    """The run that opened it."""
+
+    session_key: str
+    """Which of the run's conversations this is."""
+
+
 # How a session came to exist. Fixed when the session is created and
 # never rewritten, which is what separates it from
 # ``SessionRecord.team_id``: team membership is granted by a tool call
 # inside an existing session and can be revoked, so it is a field of its
 # own rather than a member of this union.
 SessionOrigin = Annotated[
-    Union[UserOrigin, ScheduleOrigin, ChannelOrigin, TeamOrigin],
+    Union[
+        UserOrigin,
+        ScheduleOrigin,
+        ChannelOrigin,
+        TeamOrigin,
+        SOPOrigin,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -114,6 +138,22 @@ class TTSModelConfig(BaseModel):
 
     parameters: dict
     """TTS parameters (voice, language, etc.)."""
+
+
+class RealtimeModelConfig(BaseModel):
+    """The realtime voice model configuration class."""
+
+    type: str
+    """The realtime adapter type."""
+
+    credential_id: str
+    """The credential id."""
+
+    model: str
+    """The realtime model name."""
+
+    parameters: dict
+    """Realtime model parameters (voice, turn detection, etc.)."""
 
 
 class EmbeddingModelConfig(BaseModel):
@@ -262,6 +302,9 @@ class SessionConfig(BaseModel):
 
     tts_model_config: TTSModelConfig | None = None
     """The TTS model config. None means TTS is not enabled."""
+
+    realtime_model_config: RealtimeModelConfig | None = None
+    """The realtime voice model config. None disables voice mode."""
 
     knowledge_config: SessionKnowledgeConfig | None = None
     """Knowledge bases attached to this session and the corresponding

@@ -54,17 +54,20 @@ dependencies = [
 model-gemini = ["google-genai"]
 model-ollama = ["ollama>=0.5.4"]
 model-xai = ["xai-sdk"]
+classifier-jev = ["typesafe-sdk>=0.7"]
 models = [
     "agentscope[model-gemini]",
     "agentscope[model-ollama]",
     "agentscope[model-xai]",
 ]
+classifiers = ["agentscope[classifier-jev]"]
 # ------------ Service ------------
 service = [
     "fastapi",
     "uvicorn",
     "apscheduler",
     "ag-ui-protocol>=0.1.10",
+    "aiortc>=1.14",
     "PyJWT>=2.10,<3",
 ]
 # ------------ Storage backends ------------
@@ -110,7 +113,11 @@ tools = [
 # ------------ Realtime voice ------------
 realtime = [
     "websockets>=13",
-    "sounddevice",
+]
+realtime-local = ["sounddevice"]
+# ------------ Terminal UI ------------
+tui = [
+    "textual>=8.2,<9",
 ]
 # ------------ A2A ------------
 a2a = [
@@ -167,13 +174,16 @@ reme = ["agentscope[memory-reme]"]
 # ------------ Full ------------
 full = [
     "agentscope[models]",
+    "agentscope[classifiers]",
     "agentscope[service]",
+    "agentscope[realtime]",
     "agentscope[storage-redis]",
     "agentscope[storage-sql]",
     "agentscope[storage-s3]",
     "agentscope[channel]",
     "agentscope[workspace]",
     "agentscope[tools]",
+    "agentscope[tui]",
     "agentscope[a2a]",
     "agentscope[rag]",
     "agentscope[vdb-qdrant]",
@@ -207,7 +217,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/agentscope-ai/agentscope"
-Documentation = "https://doc.agentscope.io/"
+Documentation = "https://docs.agentscope.io/"
 Repository = "https://github.com/agentscope-ai/agentscope"
 
 [tool.setuptools]

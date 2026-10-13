@@ -152,7 +152,12 @@ export const client = {
 		path: string,
 		body?: unknown,
 		params?: Record<string, string>,
-		options?: { silent?: boolean; authenticated?: boolean },
+		options?: {
+			silent?: boolean;
+			authenticated?: boolean;
+			signal?: AbortSignal;
+			timeoutMs?: number;
+		},
 	) => request<T>(path, { method: 'POST', body, params, ...options }),
 	patch: <T>(
 		path: string,

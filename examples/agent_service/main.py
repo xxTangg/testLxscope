@@ -52,7 +52,7 @@ playwright_mcp_args = (
 
 default_mcps = [
     MCPClient(
-        name="browser-use",
+        name="playwright",
         mcp_config=StdioMCPConfig(
             command=playwright_mcp_command,
             args=playwright_mcp_args,
