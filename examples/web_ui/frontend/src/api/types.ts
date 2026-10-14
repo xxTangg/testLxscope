@@ -854,6 +854,7 @@ export interface ModelCard {
 
 export interface ListModelRequest {
 	provider: string;
+	credential_id?: string;
 }
 
 export interface ListModelResponse {

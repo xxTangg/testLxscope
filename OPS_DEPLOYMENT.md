@@ -330,4 +330,4 @@ docker compose down
 - API 端口只允许用户网段或反向代理访问。
 - 定期备份 Docker 数据卷：`redis-data`、`agentscope-workspaces`、
   `agentscope-blobs` 和 `qdrant-data`。
-- 模型 API Key 只放在服务器 `.env` 中，不要提交到 Git，也不要写入前端代码。
+- 模型 API Key 可放在服务器 `.env` 中，或通过网页「凭证」页面保存到后端存储；不要提交到 Git，也不要写入前端代码。

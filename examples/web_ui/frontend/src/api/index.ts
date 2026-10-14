@@ -8,6 +8,8 @@ export { hubApi } from './hub';
 export { mcpApi } from './mcp';
 export { skillApi } from './skill';
 export { scheduleApi } from './schedule';
+export { sopApi } from './sop';
+export type { SOPData, SOPRecord, SOPRunRecord, SOPStep, SOPPhase, SOPSessionSettings } from './sop';
 export { embeddingModelApi, modelApi, realtimeModelApi, ttsModelApi } from './model';
 export { realtimeApi } from './realtime';
 export { knowledgeBaseApi } from './knowledgeBase';

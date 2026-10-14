@@ -10,6 +10,7 @@ from ._deepseek import DeepSeekCredential
 from ._gemini import GeminiCredential
 from ._minimax import MiniMaxCredential
 from ._moonshot import MoonshotCredential
+from ._newapi import NewAPICredential
 from ._ollama import OllamaCredential
 from ._openai import OpenAICredential
 from ._xai import XAICredential
@@ -42,6 +43,7 @@ class CredentialFactory:
         GeminiCredential,
         MiniMaxCredential,
         MoonshotCredential,
+        NewAPICredential,
         OllamaCredential,
         OpenAICredential,
         XAICredential,

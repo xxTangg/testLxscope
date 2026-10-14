@@ -29,6 +29,7 @@ import { CredentialPage } from '@/pages/credential';
 import { KnowledgePage } from '@/pages/knowledge';
 import { LoginPage } from '@/pages/login';
 import { SchedulePage } from '@/pages/schedule';
+import { SOPPage } from '@/pages/sop';
 import { SetupPage } from '@/pages/setup';
 
 function SetupPageRoute() {
@@ -85,6 +86,7 @@ const router = createBrowserRouter([
 						element: <ChatPage />,
 					},
 					{ path: '/schedule', element: <SchedulePage /> },
+					{ path: '/sop', element: <SOPPage /> },
 					{ path: '/channel', element: <ChannelPage /> },
 					{ path: '/credential', element: <CredentialPage /> },
 					{ path: '/mcp', element: <MCPHubPage /> },

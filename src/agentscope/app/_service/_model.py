@@ -2,7 +2,7 @@
 """Model service: builds a ChatModelBase from stored credential + config."""
 from ._access import ResourceAccessService
 from ..storage import ChatModelConfig, RealtimeModelConfig
-from ...credential import CredentialFactory
+from ...credential import CredentialFactory, NewAPICredential
 from ...model import ChatModelBase
 from ...realtime import RealtimeModelBase
 from ..._logging import logger
@@ -58,9 +58,14 @@ async def get_model(
         parameters=parameters,
     )
 
+    if isinstance(credential, NewAPICredential):
+        model.context_size = credential.context_size
+        model.formatter.input_types = ["text/plain"]
+        return model
+
     # Override the context size and the formatter's input types with the
-    # built-in model card's when one matches; custom models have no card,
-    # so keep the defaults.
+    # built-in model card's when one matches; other custom models have no
+    # card, so keep the defaults.
     try:
         for card in model_cls.list_models():
             if card.name == config.model:

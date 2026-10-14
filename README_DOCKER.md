@@ -32,7 +32,7 @@ Windows PowerShell：
 Copy-Item .env.example .env
 ```
 
-编辑 `.env`，至少修改登录密码、JWT 密钥、下载密钥和模型 API Key：
+编辑 `.env`，至少修改登录密码、JWT 密钥和下载密钥。模型 API Key 可以在网页的「凭证」页面添加；如果只使用内网 NewAPI，将 `SILICONFLOW_API_KEY` 留空：
 
 ```env
 # 浏览器访问端口
@@ -54,7 +54,7 @@ AGENTSCOPE_JWT_EXPIRE_MINUTES=1440
 AGENTSCOPE_DOWNLOAD_SECRET=请替换为随机长字符串
 
 # 模型配置
-SILICONFLOW_API_KEY=你的APIKey
+SILICONFLOW_API_KEY=
 SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
 SILICONFLOW_CHAT_MODEL=deepseek-ai/DeepSeek-V3.2
 SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
@@ -71,6 +71,8 @@ openssl rand -hex 32
 ```
 
 请勿将包含真实密码和密钥的 `.env` 提交到 Git。
+
+启动后，在「凭证」页面选择 **NewAPI / OpenAI-compatible**，填写 NewAPI Token、服务端可访问的 API Base URL（例如 `http://newapi.internal:3000/v1`）和模型 ID。多个模型 ID 可用换行或逗号分隔。上下文长度及最大输出长度应按所用模型实际配置；创建后即可在聊天模型列表中选择。内网地址必须能从 `agentscope` 容器访问，浏览器能访问还不够。
 
 ## 3. 构建并启动
 

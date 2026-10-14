@@ -4,7 +4,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ._schema import ListModelsResponse, ListModelsRequest
-from ...credential import CredentialFactory
+from ..deps import get_current_user_id, get_resource_access_service
+from .._service import ResourceAccessService
+from ...credential import CredentialFactory, NewAPICredential
 
 model_router = APIRouter(
     prefix="/model",
@@ -20,6 +22,8 @@ model_router = APIRouter(
 )
 async def list_models(
     body: ListModelsRequest = Depends(),
+    user_id: str = Depends(get_current_user_id),
+    access: ResourceAccessService = Depends(get_resource_access_service),
 ) -> ListModelsResponse:
     """Return all candidate models under the given credential type.
 
@@ -36,5 +40,17 @@ async def list_models(
             detail=f"Provider '{body.provider}' not found.",
         )
 
-    models = credential_cls.get_chat_model_class().list_models()
+    if credential_cls is NewAPICredential:
+        if body.credential_id is None:
+            return ListModelsResponse(models=[], total=0)
+        record = await access.resolve_credential(user_id, body.credential_id)
+        credential = CredentialFactory.from_dict(record.data)
+        if not isinstance(credential, NewAPICredential):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Credential does not belong to this provider.",
+            )
+        models = credential.configured_models()
+    else:
+        models = credential_cls.get_chat_model_class().list_models()
     return ListModelsResponse(models=models, total=len(models))

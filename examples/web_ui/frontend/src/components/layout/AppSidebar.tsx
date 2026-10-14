@@ -8,6 +8,7 @@ import {
 	Languages,
 	LibraryBig,
 	LogOut,
+	ListChecks,
 	Repeat2,
 	Settings,
 	UserRound,
@@ -110,6 +111,17 @@ export function AppSidebar() {
 									<span className={iconLabelClassName}>
 										{t('common.schedule')}
 									</span>
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									tooltip={{ children: t('common.sop'), hidden: false }}
+									isActive={location.pathname === '/sop'}
+									onClick={() => navigate('/sop')}
+									className={iconButtonClassName}
+								>
+									<ListChecks />
+									<span className={iconLabelClassName}>{t('common.sop')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
