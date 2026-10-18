@@ -196,152 +196,154 @@ export function CreateKnowledgeBaseDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="!w-[500px] !max-w-[500px]">
-				<DialogHeader>
+			<DialogContent className="!w-[500px] !max-w-[500px] flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
+				<DialogHeader className="shrink-0">
 					<DialogTitle>{t('dialog-knowledge-base-create.title')}</DialogTitle>
 					<DialogDescription>
 						{t('dialog-knowledge-base-create.description')}
 					</DialogDescription>
 				</DialogHeader>
 
-				{isLockedPolicy && policy?.dimension != null && (
-					<Alert>
-						<Info className="size-4" />
-						<AlertTitle>
-							{t('dialog-knowledge-base-create.policy.lockedTitle', {
-								dimension: policy.dimension,
-							})}
-						</AlertTitle>
-						<AlertDescription>
-							{t('dialog-knowledge-base-create.policy.lockedDescription', {
-								dimension: policy.dimension,
-							})}
-						</AlertDescription>
-					</Alert>
-				)}
-
-				{noCompatibleModels && (
-					<Alert variant="destructive">
-						<CircleAlert className="size-4" />
-						<AlertTitle>
-							{t('dialog-knowledge-base-create.policy.noCompatibleTitle')}
-						</AlertTitle>
-						<AlertDescription>
-							{isLockedPolicy && policy?.dimension != null
-								? t('dialog-knowledge-base-create.policy.noCompatibleLocked', {
-										dimension: policy.dimension,
-									})
-								: t('dialog-knowledge-base-create.policy.noCompatibleAny')}
-						</AlertDescription>
-					</Alert>
-				)}
-
-				<FieldGroup className={HORIZONTAL_FIELD_WIDTH}>
-					<Field>
-						<FieldLabel>{t('dialog-knowledge-base-create.name.label')}</FieldLabel>
-						<Input
-							value={name}
-							onChange={(e) => setName(e.target.value)}
-							placeholder={t('dialog-knowledge-base-create.name.placeholder')}
-							disabled={submitting}
-						/>
-					</Field>
-					<Field>
-						<FieldLabel>
-							{t('dialog-knowledge-base-create.descriptionField.label')}
-						</FieldLabel>
-						<Textarea
-							value={description}
-							onChange={(e) => setDescription(e.target.value)}
-							placeholder={t(
-								'dialog-knowledge-base-create.descriptionField.placeholder',
-							)}
-							disabled={submitting}
-							rows={3}
-						/>
-					</Field>
-
-					<Separator />
-
-					<Field orientation="horizontal">
-						<FieldLabel>
-							{t('dialog-knowledge-base-create.embeddingModel.label')}
-						</FieldLabel>
-						<EmbeddingSelect
-							value={
-								selected
-									? {
-											type: selected.type,
-											credential_id: selected.credentialId,
-											model: selected.model,
-										}
-									: null
-							}
-							providers={providers}
-							loading={loading}
-							onChange={handleSelectEmbedding}
-							onAddCredential={onAddCredential}
-						/>
-					</Field>
-					<Field orientation="horizontal">
-						<FieldLabel>{t('dialog-knowledge-base-create.dimension.label')}</FieldLabel>
-						<DimensionSelect
-							value={dimension}
-							options={dimensionOptions}
-							onChange={setDimension}
-							disabled={submitting}
-						/>
-					</Field>
-
-					{chunkers.length > 0 && (
-						<>
-							<Separator />
-
-							<Field orientation="horizontal">
-								<FieldLabel>
-									{t('dialog-knowledge-base-create.chunker.label')}
-								</FieldLabel>
-								<ChunkerSelect
-									value={selectedChunkerType}
-									chunkers={chunkers}
-									onChange={handleSelectChunker}
-									disabled={submitting}
-								/>
-							</Field>
-
-							{chunkerParamSchema && (
-								<SchemaForm
-									schema={chunkerParamSchema}
-									values={chunkerParams}
-									onChange={handleChunkerParamChange}
-									skipFields={NO_SKIP}
-									idPrefix="chunker-param"
-									orientation="horizontal"
-									className={HORIZONTAL_FIELD_WIDTH}
-									labelFor={(key, prop) =>
-										t(
-											`chunker-types.${selectedChunkerType}.params.${key}.label`,
-											{ defaultValue: '' },
-										) ||
-										prop.title ||
-										undefined
-									}
-									descriptionFor={(key, prop) =>
-										t(
-											`chunker-types.${selectedChunkerType}.params.${key}.description`,
-											{ defaultValue: '' },
-										) ||
-										prop.description ||
-										undefined
-									}
-								/>
-							)}
-						</>
+				<div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+					{isLockedPolicy && policy?.dimension != null && (
+						<Alert>
+							<Info className="size-4" />
+							<AlertTitle>
+								{t('dialog-knowledge-base-create.policy.lockedTitle', {
+									dimension: policy.dimension,
+								})}
+							</AlertTitle>
+							<AlertDescription>
+								{t('dialog-knowledge-base-create.policy.lockedDescription', {
+									dimension: policy.dimension,
+								})}
+							</AlertDescription>
+						</Alert>
 					)}
 
-					{errorKey && <p className="text-destructive text-sm">{t(errorKey)}</p>}
-				</FieldGroup>
-				<DialogFooter>
+					{noCompatibleModels && (
+						<Alert variant="destructive">
+							<CircleAlert className="size-4" />
+							<AlertTitle>
+								{t('dialog-knowledge-base-create.policy.noCompatibleTitle')}
+							</AlertTitle>
+							<AlertDescription>
+								{isLockedPolicy && policy?.dimension != null
+									? t('dialog-knowledge-base-create.policy.noCompatibleLocked', {
+											dimension: policy.dimension,
+										})
+									: t('dialog-knowledge-base-create.policy.noCompatibleAny')}
+							</AlertDescription>
+						</Alert>
+					)}
+
+					<FieldGroup className={HORIZONTAL_FIELD_WIDTH}>
+						<Field>
+							<FieldLabel>{t('dialog-knowledge-base-create.name.label')}</FieldLabel>
+							<Input
+								value={name}
+								onChange={(e) => setName(e.target.value)}
+								placeholder={t('dialog-knowledge-base-create.name.placeholder')}
+								disabled={submitting}
+							/>
+						</Field>
+						<Field>
+							<FieldLabel>
+								{t('dialog-knowledge-base-create.descriptionField.label')}
+							</FieldLabel>
+							<Textarea
+								value={description}
+								onChange={(e) => setDescription(e.target.value)}
+								placeholder={t(
+									'dialog-knowledge-base-create.descriptionField.placeholder',
+								)}
+								disabled={submitting}
+								rows={3}
+							/>
+						</Field>
+
+						<Separator />
+
+						<Field orientation="horizontal">
+							<FieldLabel>
+								{t('dialog-knowledge-base-create.embeddingModel.label')}
+							</FieldLabel>
+							<EmbeddingSelect
+								value={
+									selected
+										? {
+												type: selected.type,
+												credential_id: selected.credentialId,
+												model: selected.model,
+											}
+										: null
+								}
+								providers={providers}
+								loading={loading}
+								onChange={handleSelectEmbedding}
+								onAddCredential={onAddCredential}
+							/>
+						</Field>
+						<Field orientation="horizontal">
+							<FieldLabel>{t('dialog-knowledge-base-create.dimension.label')}</FieldLabel>
+							<DimensionSelect
+								value={dimension}
+								options={dimensionOptions}
+								onChange={setDimension}
+								disabled={submitting}
+							/>
+						</Field>
+
+						{chunkers.length > 0 && (
+							<>
+								<Separator />
+
+								<Field orientation="horizontal">
+									<FieldLabel>
+										{t('dialog-knowledge-base-create.chunker.label')}
+									</FieldLabel>
+									<ChunkerSelect
+										value={selectedChunkerType}
+										chunkers={chunkers}
+										onChange={handleSelectChunker}
+										disabled={submitting}
+									/>
+								</Field>
+
+								{chunkerParamSchema && (
+									<SchemaForm
+										schema={chunkerParamSchema}
+										values={chunkerParams}
+										onChange={handleChunkerParamChange}
+										skipFields={NO_SKIP}
+										idPrefix="chunker-param"
+										orientation="horizontal"
+										className={HORIZONTAL_FIELD_WIDTH}
+										labelFor={(key, prop) =>
+											t(
+												`chunker-types.${selectedChunkerType}.params.${key}.label`,
+												{ defaultValue: '' },
+											) ||
+											prop.title ||
+											undefined
+										}
+										descriptionFor={(key, prop) =>
+											t(
+												`chunker-types.${selectedChunkerType}.params.${key}.description`,
+												{ defaultValue: '' },
+											) ||
+											prop.description ||
+											undefined
+										}
+									/>
+								)}
+							</>
+						)}
+
+						{errorKey && <p className="text-destructive text-sm">{t(errorKey)}</p>}
+					</FieldGroup>
+				</div>
+				<DialogFooter className="shrink-0">
 					<Button
 						variant="ghost"
 						onClick={() => onOpenChange(false)}

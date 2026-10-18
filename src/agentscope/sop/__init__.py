@@ -11,6 +11,7 @@ A definition holds no run state, so one can drive any number of runs.
 from ._engine import SOPEngine
 from ._schema import AgentLike, SOP, SOPStep, SOPStepBase
 from ._state import (
+    SOPAttempt,
     SOPPhase,
     SOPRunState,
     SOPStepRunState,
@@ -27,6 +28,7 @@ __all__ = [
     "SOPRunState",
     "SOPStepRunState",
     "SOPPhase",
+    "SOPAttempt",
     "VerificationResult",
     # running it
     "SOPEngine",

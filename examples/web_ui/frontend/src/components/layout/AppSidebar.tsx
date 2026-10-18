@@ -44,12 +44,14 @@ import { useTranslation } from '@/i18n/useI18n';
 
 const iconButtonClassName =
 	'h-auto! min-h-12! flex-col! justify-center! gap-0.5! p-1! text-[10px] leading-3';
-const iconLabelClassName = 'max-w-full text-center text-[9px] leading-3 whitespace-normal!';
 
 export function AppSidebar() {
 	const navigate = useNavigate();
 	const location = useLocation();
 	const { t } = useTranslation();
+	const iconLabelClassName = `max-w-full text-center text-[9px] leading-3 ${
+		i18n.language.startsWith('zh') ? 'whitespace-nowrap!' : 'whitespace-normal!'
+	}`;
 	const { startOnborda } = useOnborda();
 	const { user, logout } = useAuth();
 
@@ -77,7 +79,7 @@ export function AppSidebar() {
 	return (
 		<Sidebar
 			collapsible="none"
-			className="w-[calc(var(--sidebar-width-icon)+1px)]! bg-transparent"
+			className="w-[calc(4rem+1px)]! bg-transparent"
 		>
 			<SidebarHeader>
 				<AgentScope className="mt-2 size-8" />

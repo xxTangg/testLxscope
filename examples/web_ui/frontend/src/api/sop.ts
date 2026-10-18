@@ -1,7 +1,7 @@
 import { client } from './client';
 import type { ChatModelConfig, PermissionMode, RecordBase } from './types';
 
-export type SOPPhase = 'pending' | 'running' | 'awaiting' | 'completed' | 'failed';
+export type SOPPhase = 'pending' | 'running' | 'awaiting' | 'completed' | 'failed' | 'blocked' | 'retry_wait' | 'cancelled';
 
 export interface SOPAgentRef {
 	agent_id: string;
@@ -15,6 +15,12 @@ export type SOPVerifier =
 
 export interface SOPStep {
 	version: 'v1';
+	id: string;
+	depends_on: string[];
+	input_bindings?: Record<string, string>;
+	output_schema?: Record<string, unknown> | null;
+	timeout_seconds?: number;
+	retry_delay_seconds?: number;
 	subject: string;
 	description: string;
 	executor: SOPAgentRef;
@@ -29,10 +35,12 @@ export interface SOPSessionSettings {
 }
 
 export interface SOPData {
+	execution_mode: 'sequential' | 'dag';
+	max_concurrency: number;
 	name: string;
 	description: string;
 	steps: SOPStep[];
-	workspace_grain: 'run' | 'per_session_key';
+	workspace_grain: 'run' | 'per_session_key' | 'per_node';
 	session_settings: Record<string, SOPSessionSettings>;
 }
 
@@ -42,6 +50,15 @@ export interface SOPRecord extends RecordBase {
 }
 
 export interface SOPStepRunState {
+	node_id: string;
+	generation: number;
+	attempt_id: string | null;
+	wait_reason: string | null;
+	waiting_on: string | null;
+	error: string | null;
+	outputs: Record<string, unknown>;
+	artifacts: Array<{ name: string; sha256: string; size: number }>;
+	attempts: Array<{ id: string; number: number; status: string; started_at: string; ended_at: string | null; error: string | null; outputs: Record<string, unknown>; sessions: Record<string, string> }>;
 	phase: SOPPhase;
 	given: unknown[];
 	submission: Array<{ type: string; text?: string; [key: string]: unknown }> | null;
@@ -69,11 +86,16 @@ export const sopApi = {
 				? [{ name: 'user', role: 'user', content: [{ type: 'text', text: input.trim() }] }]
 				: [],
 		}),
-	verdict: (runId: string, stepIndex: number, passed: boolean, message: string) =>
+	verdict: (runId: string, stepIndex: number, passed: boolean, message: string, expectedAttemptId?: string | null) =>
 		client.post<SOPRunRecord>(`/sop/runs/${runId}/verdict`, {
 			step_index: stepIndex,
 			passed,
 			message,
+			expected_attempt_id: expectedAttemptId,
 		}),
+	retryNode: (runId: string, nodeId: string, generation: number, includeDescendants = false) =>
+		client.post<SOPRunRecord>(`/sop/runs/${runId}/nodes/${nodeId}/retry`, { expected_generation: generation, include_descendants: includeDescendants }),
+	resume: (runId: string) => client.post<SOPRunRecord>(`/sop/runs/${runId}/resume`, {}),
+	cancel: (runId: string) => client.post<SOPRunRecord>(`/sop/runs/${runId}/cancel`, {}),
 	deleteRun: (runId: string) => client.delete(`/sop/runs/${runId}`),
 };

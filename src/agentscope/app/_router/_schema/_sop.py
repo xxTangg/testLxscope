@@ -64,7 +64,15 @@ class SubmitVerdictRequest(BaseModel):
         description="Which step is being judged, by its position.",
     )
     passed: bool = Field(description="Whether the attempt is accepted.")
+    expected_attempt_id: str | None = None
     message: str = Field(
         default="",
         description="Why it was refused, handed to the author verbatim.",
     )
+
+
+class RetrySOPNodeRequest(BaseModel):
+    """An explicit local retry; completed downstream outputs require consent."""
+
+    include_descendants: bool = False
+    expected_generation: int | None = Field(default=None, ge=0)

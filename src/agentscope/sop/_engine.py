@@ -114,6 +114,14 @@ class SOPEngine:
                 return
 
             while True:
+                if (
+                    not resuming
+                    and record.submission is None
+                    and len(record.verifications) - record.retry_offset
+                    >= step.max_attempts
+                ):
+                    record.phase = SOPPhase.FAILED
+                    return
                 # The answer goes to the step that parked; a fresh
                 # attempt gets what the run knows so far.
                 if not resuming:
@@ -148,7 +156,10 @@ class SOPEngine:
                     return
                 if record.phase is SOPPhase.COMPLETED:
                     break
-                if len(record.verifications) >= step.max_attempts:
+                if (
+                    len(record.verifications) - record.retry_offset
+                    >= step.max_attempts
+                ):
                     record.phase = SOPPhase.FAILED
                     return
 

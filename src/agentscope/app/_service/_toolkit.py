@@ -231,15 +231,45 @@ time or interval"
     # A step's turn gets one submit tool: handover until something has
     # been handed over, verdict after.
     if sop_dispatch is not None:
-        sop_run_id, _, step_index = sop_dispatch.rpartition(":")
+        from ..storage._model._sop import _parse_sop_dispatch
+
+        sop_run_id, index, generation = _parse_sop_dispatch(sop_dispatch)
         run = await storage.get_sop_run(user_id, sop_run_id)
-        index = int(step_index)
-        if run is not None and index < len(run.state.steps):
+        if run is not None and 0 <= index < len(run.state.steps):
+            node, definition = (
+                run.state.steps[index],
+                run.definition.steps[index],
+            )
+            if generation is not None and generation != node.generation:
+                raise ValueError("This SOP worker was superseded.")
+            if run.definition.execution_mode == "dag":
+                ref = (
+                    definition.executor
+                    if node.submission is None
+                    else getattr(definition.verifier, "agent", None)
+                )
+                if (
+                    ref is None
+                    or run.sessions.get(
+                        run.definition.session_key(definition, ref.session_key)
+                    )
+                    != session_record.id
+                ):
+                    raise ValueError(
+                        "This session does not own the active SOP attempt."
+                    )
             submit_kwargs: dict[str, Any] = {
                 "storage": storage,
                 "user_id": user_id,
                 "sop_run_id": sop_run_id,
                 "step_index": index,
+                "message_bus": message_bus
+                if run.definition.execution_mode == "dag"
+                else None,
+                "expected_attempt_id": run.state.steps[index].attempt_id,
+                "expected_generation": run.state.steps[index].generation,
+                "workspace": workspace,
+                "session_record": session_record,
             }
             tools.append(
                 SubmitHandover(**submit_kwargs)

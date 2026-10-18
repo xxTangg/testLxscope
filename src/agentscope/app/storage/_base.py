@@ -822,6 +822,10 @@ class StorageBase(ABC):
     # SOP persistence
     # ------------------------------------------------------------------
 
+    async def list_recoverable_sop_runs(self) -> list[SOPRunRecord]:
+        """Internal recovery scan; backends may override for durable scheduling."""
+        return []
+
     async def upsert_sop(self, user_id: str, record: SOPRecord) -> SOPRecord:
         """Create or overwrite a procedure.
 

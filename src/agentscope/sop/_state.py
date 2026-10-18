@@ -7,6 +7,8 @@ and hands each step the slice that is its own, so nothing about a run
 ever lives on a step object.
 """
 from enum import StrEnum
+from typing import Any
+from copy import deepcopy
 
 from pydantic import (
     BaseModel,
@@ -41,6 +43,27 @@ class SOPPhase(StrEnum):
 
     FAILED = "failed"
     """Refused until :attr:`~._schema.SOPStepBase.max_attempts` ran out."""
+
+    BLOCKED = "blocked"
+    RETRY_WAIT = "retry_wait"
+    CANCELLED = "cancelled"
+
+
+class SOPAttempt(BaseModel):
+    """Immutable evidence of each node attempt, retained on local reruns."""
+
+    id: str = Field(default_factory=_generate_id)
+    number: int
+    started_at: str = Field(default_factory=_generate_timestamp)
+    ended_at: str | None = None
+    status: str = "running"
+    inputs: list[Msg] = Field(default_factory=list)
+    submission: list[TextBlock | DataBlock] | None = None
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    sessions: dict[str, str] = Field(default_factory=dict)
+    error: str | None = None
+    verdict: dict[str, Any] | None = None
 
 
 class VerificationResult(BaseModel):
@@ -78,6 +101,41 @@ class SOPStepRunState(BaseModel):
 
     phase: SOPPhase = SOPPhase.PENDING
     """Where the step stands."""
+
+    node_id: str = ""
+    generation: int = 0
+    attempt_id: str | None = None
+    attempts: list[SOPAttempt] = Field(default_factory=list)
+    retry_offset: int = 0
+    wait_reason: str | None = None
+    waiting_on: str | None = None
+    error: str | None = None
+    retry_at: float | None = None
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+
+    def finish_attempt(self, status: str, error: str | None = None) -> None:
+        """Keep the draft before a rejection clears the live submission."""
+        if (
+            self.attempts
+            and self.attempts[-1].id == self.attempt_id
+            and self.attempts[-1].ended_at is None
+        ):
+            attempt = self.attempts[-1]
+            attempt.status = status
+            attempt.ended_at = _generate_timestamp()
+            attempt.inputs = deepcopy(self.given)
+            attempt.submission = deepcopy(self.submission)
+            attempt.outputs = deepcopy(self.outputs)
+            attempt.artifacts = deepcopy(self.artifacts)
+            attempt.error = error
+            if (
+                status in ("completed", "rejected", "failed")
+                and self.verifications
+            ):
+                attempt.verdict = self.verifications[-1].model_dump(
+                    mode="json"
+                )
 
     given: list[Msg] = Field(default_factory=list)
     """What the engine dispatched this attempt with — the run's inputs
@@ -127,6 +185,10 @@ class SOPRunState(BaseModel):
     created_at: str = Field(default_factory=_generate_timestamp)
     """When the run was created."""
 
+    cancelled: bool = False
+    workspace_id: str | None = None
+    coordinator_token: str | None = None
+
     @computed_field  # type: ignore[misc]
     @property
     def phase(self) -> SOPPhase:
@@ -140,12 +202,16 @@ class SOPRunState(BaseModel):
                 How far along the run as a whole is.
         """
         phases = [_.phase for _ in self.steps]
+        if self.cancelled:
+            return SOPPhase.CANCELLED
         if not phases or all(_ is SOPPhase.PENDING for _ in phases):
             return SOPPhase.PENDING
-        if any(_ is SOPPhase.FAILED for _ in phases):
-            return SOPPhase.FAILED
         if all(_ is SOPPhase.COMPLETED for _ in phases):
             return SOPPhase.COMPLETED
+        if any(_ in (SOPPhase.RUNNING, SOPPhase.RETRY_WAIT) for _ in phases):
+            return SOPPhase.RUNNING
         if any(_ is SOPPhase.AWAITING for _ in phases):
             return SOPPhase.AWAITING
+        if any(_ is SOPPhase.FAILED for _ in phases):
+            return SOPPhase.FAILED
         return SOPPhase.RUNNING

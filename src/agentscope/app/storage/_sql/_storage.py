@@ -1196,6 +1196,29 @@ class AsyncSQLAlchemyStorage(StorageBase):
             row.phase = new_row.phase
             await sess.commit()
 
+    async def list_recoverable_sop_runs(self) -> list[SOPRunRecord]:
+        """Only the lifecycle recovery worker uses this cross-owner scan."""
+        from sqlalchemy import select
+
+        async with self._session() as sess:
+            rows = (
+                (
+                    await sess.execute(
+                        select(SOPRunRow).where(
+                            SOPRunRow.phase.not_in(
+                                [
+                                    SOPPhase.COMPLETED.value,
+                                    SOPPhase.CANCELLED.value,
+                                ]
+                            ),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [_to_record(row, SOPRunRecord) for row in rows]
+
     async def delete_sop_run(self, user_id: str, sop_run_id: str) -> bool:
         """Delete one run and its sessions in one transaction."""
         async with self._session() as sess:

@@ -156,8 +156,10 @@ class SOPStepBase(ABC):
             ),
         )
         if passed:
+            state.finish_attempt("completed")
             state.phase = SOPPhase.COMPLETED
         else:
+            state.finish_attempt("rejected", message)
             state.submission = None
             state.phase = SOPPhase.PENDING
 

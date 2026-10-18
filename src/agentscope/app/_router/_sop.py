@@ -31,6 +31,7 @@ from ..storage import (
 )
 from ..storage._model._sop import _session_agents
 from ...sop import SOPPhase
+from ._schema._sop import RetrySOPNodeRequest
 
 sop_router = APIRouter(
     prefix="/sop",
@@ -283,6 +284,7 @@ async def submit_verdict(
             body.step_index,
             body.passed,
             body.message,
+            body.expected_attempt_id,
         )
     except KeyError as exc:
         raise HTTPException(
@@ -296,6 +298,59 @@ async def submit_verdict(
         ) from exc
     service.advance_later(user_id, sop_run_id)
     return updated
+
+
+@sop_router.post(
+    "/runs/{sop_run_id}/nodes/{node_id}/retry", response_model=SOPRunRecord
+)
+async def retry_sop_node(
+    sop_run_id: str,
+    node_id: str,
+    body: RetrySOPNodeRequest,
+    user_id: str = Depends(get_current_user_id),
+    service: SOPService = Depends(get_sop_service),
+) -> SOPRunRecord:
+    """Retry a node in place, optionally invalidating its descendants."""
+    try:
+        return await service.retry_node(
+            user_id,
+            sop_run_id,
+            node_id,
+            include_descendants=body.include_descendants,
+            expected_generation=body.expected_generation,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@sop_router.post("/runs/{sop_run_id}/resume", response_model=SOPRunRecord)
+async def resume_sop_run(
+    sop_run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    service: SOPService = Depends(get_sop_service),
+) -> SOPRunRecord:
+    """Continue eligible nodes without restarting successful work."""
+    try:
+        return await service.resume_run(user_id, sop_run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@sop_router.post("/runs/{sop_run_id}/cancel", response_model=SOPRunRecord)
+async def cancel_sop_run(
+    sop_run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    service: SOPService = Depends(get_sop_service),
+) -> SOPRunRecord:
+    """Stop unfinished nodes, retaining all history and successful results."""
+    try:
+        return await service.cancel_run(user_id, sop_run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @sop_router.get(

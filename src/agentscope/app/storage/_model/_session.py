@@ -90,6 +90,9 @@ class SOPOrigin(BaseModel):
     session_key: str
     """Which of the run's conversations this is."""
 
+    node_id: str | None = None
+    attempt_id: str | None = None
+
 
 # How a session came to exist. Fixed when the session is created and
 # never rewritten, which is what separates it from

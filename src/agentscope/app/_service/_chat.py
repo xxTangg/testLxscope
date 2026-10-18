@@ -1591,14 +1591,53 @@ class ChatService:
             MessageBusKeys.SOP_DISPATCH_FIELD,
         )
         if claim is None:
-            return None
-        sop_run_id, _, step_index = claim.rpartition(":")
+            # Sessions persist the run/node origin, so losing an in-memory
+            # registry during an upgrade cannot strand an awaiting tool.
+            # The caller has already owner-scoped this session.
+            # Resolve its origin through durable run recovery when available.
+            for candidate in await self._storage.list_recoverable_sop_runs():
+                if candidate.user_id == user_id:
+                    for index, definition in enumerate(
+                        candidate.definition.steps
+                    ):
+                        node = candidate.state.steps[index]
+                        if (
+                            node.phase is not SOPPhase.AWAITING
+                            or node.wait_reason == "human"
+                        ):
+                            continue
+                        ref = (
+                            definition.executor
+                            if node.submission is None
+                            else getattr(definition.verifier, "agent", None)
+                        )
+                        if (
+                            ref
+                            and candidate.sessions.get(
+                                candidate.definition.session_key(
+                                    definition, ref.session_key
+                                )
+                            )
+                            == session_id
+                        ):
+                            claim = f"{candidate.id}:{index}"
+                            break
+                if claim:
+                    break
+            if claim is None:
+                return None
+        from ..storage._model._sop import _parse_sop_dispatch
+
+        sop_run_id, index, generation = _parse_sop_dispatch(claim)
         run = await self._storage.get_sop_run(user_id, sop_run_id)
-        index = int(step_index)
         if (
             run is None
-            or index >= len(run.state.steps)
+            or not 0 <= index < len(run.state.steps)
             or run.state.steps[index].phase is not SOPPhase.AWAITING
+            or (
+                generation is not None
+                and run.state.steps[index].generation != generation
+            )
         ):
             return None
         step = run.definition.steps[index]
@@ -1607,8 +1646,16 @@ class ChatService:
             if run.state.steps[index].submission is None
             else getattr(step.verifier, "agent", None)
         )
-        if ref is None or run.sessions.get(ref.session_key) != session_id:
+        if (
+            ref is None
+            or run.sessions.get(
+                run.definition.session_key(step, ref.session_key)
+            )
+            != session_id
+        ):
             return None
+        if run.definition.execution_mode == "dag":
+            return f"{sop_run_id}:{run.state.steps[index].generation}:{index}"
         return claim
 
     async def _project_event(

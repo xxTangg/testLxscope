@@ -403,6 +403,17 @@ class SOPRouterTest(IsolatedAsyncioTestCase):
         ).json()["id"]
 
         other = {"X-User-ID": "bob"}
+        for action, body in (
+            ("resume", {}),
+            ("cancel", {}),
+            ("nodes/step-1/retry", {"expected_generation": 0}),
+        ):
+            self.assertEqual(
+                self._client.post(
+                    f"/sop/runs/{run_id}/{action}", json=body, headers=other
+                ).status_code,
+                404,
+            )
         self.assertEqual(
             self._client.get("/sop/", headers=other).json()["total"],
             0,

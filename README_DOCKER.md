@@ -1,5 +1,7 @@
 # 龙信助手 Docker 启动说明
 
+SOP 现支持 DAG 并行编排、节点级重试和断点恢复，使用与 API 说明见 [SOP DAG 编排与局部恢复](./SOP_DAG.md)。
+
 本文说明如何使用仓库根目录的 `docker-compose.yml` 构建并启动龙信助手。
 
 ## 1. 环境要求

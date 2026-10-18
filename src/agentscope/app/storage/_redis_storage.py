@@ -1757,6 +1757,21 @@ class RedisStorage(StorageBase):
                 records.append(record)
         return sorted(records, key=lambda _: _.created_at, reverse=True)
 
+    async def list_recoverable_sop_runs(self) -> list[SOPRunRecord]:
+        """Recover work from durable records, including pre-upgrade runs."""
+        pattern = self.key_config.sop_run.format(user_id="*", sop_run_id="*")
+        records = []
+        async for key in self._client.scan_iter(match=pattern, count=100):
+            raw = await self._client.get(key)
+            if raw:
+                record = SOPRunRecord.model_validate_json(raw)
+                if record.state.phase not in (
+                    SOPPhase.COMPLETED,
+                    SOPPhase.CANCELLED,
+                ):
+                    records.append(record)
+        return records
+
     async def update_sop_run(
         self,
         user_id: str,

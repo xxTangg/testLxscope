@@ -179,6 +179,11 @@ class MessageBusKeys:  # pylint: disable=too-many-public-methods
     SOP_RUN_TTL_SECS = 600
     """Lock lease for a SOP run (10 minutes), renewed while held."""
 
+    @staticmethod
+    def sop_coordinator(sop_run_id: str) -> str:
+        """One DAG coordinator; state writes use the separate short run lock."""
+        return f"agentscope:sop:coordinator:{sop_run_id}"
+
     _SOP_DISPATCH_NS = "agentscope:sop:dispatch:{sid}"
 
     SOP_DISPATCH_FIELD = "step"

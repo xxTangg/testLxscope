@@ -17,7 +17,7 @@ from agentscope.app.channel import (
 )
 from agentscope.app.deps import get_current_user_id
 from agentscope.app.hub import ClawSkillHub, GitHubMCPHub
-from agentscope.app.message_bus import InMemoryMessageBus
+from agentscope.app.message_bus import RedisMessageBus
 from agentscope.app.rag.knowledge_base_manager import CollectionPerKbManager
 from agentscope.app.storage import RedisStorage
 from agentscope.app.workspace_manager import LocalWorkspaceManager
@@ -133,16 +133,11 @@ async def longterm_memory_factory(
 
 app = create_app(
     storage=storage,
-    message_bus=InMemoryMessageBus(),
-    # -- To use a Redis-backed message bus instead (recommended for
-    # -- multi-process / production deployments), uncomment the lines
-    # -- below and replace the InMemoryMessageBus() above:
-    #
-    # from agentscope.app.message_bus import RedisMessageBus
-    # message_bus=RedisMessageBus(
-    #     host="localhost",
-    #     port=6379,
-    # ),
+    message_bus=RedisMessageBus(
+        host=os.getenv("REDIS_HOST", "localhost"),
+        port=int(os.getenv("REDIS_PORT", "6379")),
+        password=os.getenv("REDIS_PASSWORD") or None,
+    ),
     workspace_manager=LocalWorkspaceManager(
         basedir=os.path.join(
             os.path.dirname(os.path.abspath(__file__)),

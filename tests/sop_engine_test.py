@@ -35,6 +35,14 @@ from agentscope.sop import (
 )
 from agentscope.types import ReplyFinishedReason
 
+# These snapshots cover the legacy payload; DAG metadata has dedicated tests.
+RUNTIME_FIELDS = set(SOPStepRunState.model_fields) - {
+    "phase",
+    "given",
+    "submission",
+    "verifications",
+}
+
 
 def _finished(name: str, output: dict) -> AssistantMsg:
     """A reply that ended with structured output."""
@@ -160,7 +168,15 @@ class SOPEngineTest(IsolatedAsyncioTestCase):
         self.assertIn("did A", str(second.asked[0]))
         self.maxDiff = None
         self.assertDictEqual(
-            engine.state.model_dump(exclude={"inputs"}),
+            engine.state.model_dump(
+                exclude={
+                    "inputs": True,
+                    "cancelled": True,
+                    "workspace_id": True,
+                    "coordinator_token": True,
+                    "steps": {"__all__": RUNTIME_FIELDS},
+                }
+            ),
             {
                 "id": AnyString(),
                 "created_at": AnyString(),
@@ -495,7 +511,15 @@ class SOPEngineTest(IsolatedAsyncioTestCase):
         await self._drive(engine)
 
         self.assertDictEqual(
-            engine.state.model_dump(mode="json"),
+            engine.state.model_dump(
+                mode="json",
+                exclude={
+                    "cancelled": True,
+                    "workspace_id": True,
+                    "coordinator_token": True,
+                    "steps": {"__all__": RUNTIME_FIELDS},
+                },
+            ),
             {
                 "id": AnyString(),
                 "inputs": [],
@@ -580,7 +604,7 @@ class SOPEngineTest(IsolatedAsyncioTestCase):
         self.assertIsInstance(executor.asked[1], UserInterruptEvent)
         self.assertEqual(len(executor.asked), 2)
         self.assertDictEqual(
-            engine.state.steps[0].model_dump(),
+            engine.state.steps[0].model_dump(exclude=RUNTIME_FIELDS),
             {
                 "phase": SOPPhase.PENDING,
                 # What the abandoned attempt was dispatched with stays on

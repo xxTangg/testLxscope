@@ -251,7 +251,13 @@ class SOPServiceTest(IsolatedAsyncioTestCase):
         self.assertEqual(stored.state.phase, SOPPhase.COMPLETED)
         self.maxDiff = None
         self.assertListEqual(
-            [_.model_dump(mode="json") for _ in stored.state.steps],
+            [
+                _.model_dump(
+                    mode="json",
+                    include={"phase", "given", "submission", "verifications"},
+                )
+                for _ in stored.state.steps
+            ],
             [
                 {
                     "phase": "completed",
@@ -726,7 +732,7 @@ class SOPServiceTest(IsolatedAsyncioTestCase):
             run.sessions["modeller"],
         )
         self.assertEqual(
-            session.origin.model_dump(),
+            session.origin.model_dump(exclude_none=True),
             {
                 "type": "sop",
                 "sop_run_id": run.id,
