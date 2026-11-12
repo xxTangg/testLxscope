@@ -1,0 +1,934 @@
+# 公文写作 Skill
+
+> 内网系统分发说明（2026-10-21）：此副本仅使用用户上传或明确授权的内网材料，禁止运行时访问公网、下载资源或动态安装依赖。输出仅放当前会话工作目录。下文保留的上游在线安装、联网取材、主目录输出等示例不适用于本分发版本，以 `prompts/core/policy.md` 与 `prompts/core/workflow.md` 的内网约定为准。已去除分发授权未确认的字体二进制，Word 导出使用目标系统已安装字体。
+
+> 一句话：把你的素材和要求交给 AI，让它按国家《党政机关公文格式》（GB/T 9704-2012）的规范，帮你起草报告、通知、请示、纪要等 **22 种**公文与正式材料，并可导出 Word。
+
+<a id="quickstart"></a>
+
+## 零、快速上手：先对号入座
+
+不确定从哪开始？**先看你手上是什么工具**，对号入座走一条路就行。三条路最终遵循的是同一套公文规范，区别只在「怎么把规则喂给 AI」。
+
+**先看你手上是什么工具**，对号入座走对应一条路。三条路遵循同一套公文规范，区别只在「怎么把规则喂给 AI」。完整操作步骤见 **[二、使用](#usage)**。
+
+| 你的工具 | 怎么用（一句话） | 详细步骤 |
+|---|---|---|
+| **能装 skill**（Codex / Claude Code） | 装一次，之后对话里触发 `/official-document-drafting` 直接说要写什么，无需复制提示词 | [一、安装](#install) → [二 ·（一）](#usage) |
+| **网页版 AI**（DeepSeek 网页版 / 文心 / Kimi，能联网） | 不用安装，复制对应文种现成 `prompt.md` 粘进对话框，让它联网搜资料 | [二 ·（二）](#usage) |
+| **内网离线**（本地 WebUI / Qwen / AnythingLLM） | 同一批 `prompt.md`，但素材要你自己准备好一起喂；有 Python 还能用 `build.py` 按素材现拼 | [二 ·（三）](#usage) |
+
+> **现成提示词直达**：[报告](./dist/offline/default/doc-types/report-%E6%8A%A5%E5%91%8A/prompt.md) ／ [通知](./dist/offline/default/doc-types/notice-%E9%80%9A%E7%9F%A5/prompt.md) ／ [请示](./dist/offline/default/doc-types/request-%E8%AF%B7%E7%A4%BA/prompt.md) ／ [纪要](./dist/offline/default/doc-types/minutes-%E7%BA%AA%E8%A6%81/prompt.md)（[全部文种](./dist/offline/default/doc-types/)）；想先看完整效果就翻 [样例/](./样例)。成稿要 Word 时见 [五、Word 导出与版式](#word-export)。
+
+### 这个仓库里，哪些文件夹是给你用的？
+
+| 文件夹 / 文件 | 是什么 | 你要不要管 |
+|---|---|---|
+| `dist/offline/default/doc-types/<文种>/prompt.md` | **现成提示词**，复制即用 | ✅ 模式二/三 从这里复制 |
+| `样例/` | **完整样例**走一遍（任务 → 素材 → 提示词 → 成稿 → Word）；分 `online/` 联网（模式一、二）和 `offline/` 离线（模式三） | ✅ 想看效果就翻这里 |
+| `assets/templates/` | 各文种**空白模板**（骨架） | ✅ 可选参考 |
+| `SKILL.md`、`dist/skill/` | 给「能装 skill 的工具」用的入口 | ✅ 模式一 |
+| `docs/` | 详细规则说明（版式、文种辨析等） | 📖 想深入再看 |
+| `skills/` | 各项能力的**路由说明**（进阶） | 📖 进阶 |
+| `prompts/` | 规则**主源**（维护者在这里改规则） | ⚙️ 内部，日常不用动 |
+| `src/` | 构建与 Word 导出的**代码** | ⚙️ 内部（只在导出 Word 时会用到） |
+| `dist/` | 由主源**自动生成**的产物（`prompt.md` 就在它下面） | ⚙️ 自动生成，别手改 |
+| `tests/` | 自动化测试 | ⚙️ 内部，不用管 |
+
+> **名字怎么区分**：**`样例/`** = 完整跑通的成品（任务 → 素材 → 提示词 → 成稿 → Word，给你看效果）；**范文** = `prompts/.../examples.md` 里喂给 AI 的片段；**`skills/`** = 各项能力的路由说明。三者不是一回事，别混。
+
+<a id="install"></a>
+
+## 一、安装
+
+### （一）在线工具中的 Skill 安装
+
+适用于 Codex、agents 或其他兼容 `~/.codex/skills/` 目录的宿主环境。
+
+从 GitHub 安装：
+
+```bash
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+python3 "$CODEX_HOME/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
+  --repo zhaohui-yang/official-document-drafting \
+  --path . \
+  --name official-document-drafting
+```
+
+如果你的宿主把 Codex 安装在其他目录，优先改 `CODEX_HOME`，不要把路径写死成某一台机器上的绝对路径。
+
+从本地复制安装：
+
+```bash
+mkdir -p ~/.codex/skills
+cp -R ./official-document-drafting ~/.codex/skills/
+```
+
+安装后，目标目录通常是：
+
+- Linux / macOS / UOS / 麒麟等类 Unix 系统：`~/.codex/skills/official-document-drafting`
+- Windows：`%USERPROFILE%\\.codex\\skills\\official-document-drafting`
+
+### （二）Claude Code 安装
+
+如果你的宿主是 Claude Code，更接近的安装目录通常是 Claude 自己的 skills 目录，而不是 `~/.codex/skills/`。
+
+个人级安装：
+
+```bash
+mkdir -p ~/.claude/skills
+cp -R ./official-document-drafting ~/.claude/skills/
+```
+
+项目级安装：
+
+```bash
+mkdir -p ./.claude/skills
+cp -R ./official-document-drafting ./.claude/skills/
+```
+
+安装完成后，目标目录通常是：
+
+- Linux / macOS / UOS / 麒麟等类 Unix 系统：`~/.claude/skills/official-document-drafting`
+- Windows：`%USERPROFILE%\\.claude\\skills\\official-document-drafting`
+
+> 也可以只安装**自包含的精简包**：`dist/skill/`（`SKILL.md` + `references/` + `agents/openai.yaml`，references 模式、不含 `src/`、`tests/`、`样例/`）。把这一个文件夹复制成 `~/.codex/skills/official-document-drafting` 或 `~/.claude/skills/official-document-drafting` 即可——SKILL.md 是短入口，详细规则按需读取 `references/` 下「共享规则」和「各文种」文件。导出 Word 仍需仓库内的 `src/scripts/generate_docx.py`。
+
+### （三）不同操作系统说明
+
+Linux、UOS、麒麟等类 Linux 系统可直接使用上面的 `bash` 命令。
+
+Windows 如使用 PowerShell，可按同样目录结构复制：
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.codex\skills" | Out-Null
+Copy-Item -Recurse -Force .\official-document-drafting "$env:USERPROFILE\.codex\skills\official-document-drafting"
+```
+
+如在 Windows 上通过 WSL 运行 Codex 或 Python，优先沿用 Linux 方式安装和执行脚本。
+
+Windows 如需通过 `skill-installer` 从 GitHub 安装，可使用：
+
+```powershell
+$codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
+python "$codexHome\skills\.system\skill-installer\scripts\install-skill-from-github.py" `
+  --repo zhaohui-yang/official-document-drafting `
+  --path . `
+  --name official-document-drafting
+```
+
+### （四）单机离线模式
+
+这一节只对应 `src/adapters/offline/` 这一类离线提示词适配器，不代表整个 `src/adapters/` 目录都只服务离线场景。
+
+进一步查看：
+
+- [src/adapters/offline/README.md](./src/adapters/offline/README.md)：离线适配器的单独使用说明。
+- [src/adapters/offline/build.py](./src/adapters/offline/build.py)：离线提示词构建入口脚本。
+- [dist/offline/default/system_prompt.md](./dist/offline/default/system_prompt.md)：默认 profile 生成的正式离线全量 `system_prompt` 产物。
+- [dist/offline/default/doc-types/](./dist/offline/default/doc-types/)：每个文种单独可用的离线 prompt 产物目录。
+
+如果你的环境是 WebUI、AnythingLLM、Qwen 本地前端或其他单机模型前端，通常不需要先安装为 skill；保留仓库目录即可，直接使用离线提示词构建器：
+
+```bash
+python3 src/adapters/offline/build.py
+```
+
+如果你想先看看离线模式下正式使用的 `system_prompt` 大致长什么样、包含哪些规则，可以直接参考：
+
+- 全量规则产物：[dist/offline/default/system_prompt.md](./dist/offline/default/system_prompt.md)
+- 单文种 prompt 目录：[dist/offline/default/doc-types/](./dist/offline/default/doc-types/)
+
+需要直接用某个文种时，打开该文种目录下的 `prompt.md` 粘贴即可。例如：
+
+- [报告 prompt](./dist/offline/default/doc-types/report-%E6%8A%A5%E5%91%8A/prompt.md)
+- [通知 prompt](./dist/offline/default/doc-types/notice-%E9%80%9A%E7%9F%A5/prompt.md)
+- [请示 prompt](./dist/offline/default/doc-types/request-%E8%AF%B7%E7%A4%BA/prompt.md)
+- [纪要 prompt](./dist/offline/default/doc-types/minutes-%E7%BA%AA%E8%A6%81/prompt.md)
+
+如果模型容易跑偏，可先用 `python3 src/adapters/offline/build.py --task outline --doc-type <文种>` 生成提纲，确认结构后再扩写全文。
+
+直接运行 `python3 src/adapters/offline/build.py` 时，默认会重建：
+
+- [dist/offline/default/system_prompt.md](./dist/offline/default/system_prompt.md)：全量离线 `system_prompt`
+- [dist/offline/default/doc-types/](./dist/offline/default/doc-types/)：各文种单独可用的离线 prompt
+
+只有在你想“只生成某一部分”或“按当前任务即时拼装提示词”时，才需要再传特殊参数。
+
+更准确地说：
+
+- `Codex / agents / 兼容 skill 宿主`：按上面的方式安装到 `~/.codex/skills/`
+- `Claude Code`：按上面的方式安装到 `~/.claude/skills/` 或项目内 `./.claude/skills/`
+- `WebUI / AnythingLLM / 本地问答前端`：一般不走 skill 安装，直接使用 `src/adapters/offline/build.py` 生成提示词
+
+如果你想按仓库内置样例完整走一遍“长原始素材 -> 提炼材料 -> 生成提示词 -> 本地宿主 -> Word 导出”的流程，可以直接看：
+
+- [样例/offline/raw-materials/](./样例/offline/raw-materials/)：断网场景下已下载到本地的长原始素材汇编。
+- [样例/offline/report-报告/](./样例/offline/report-%E6%8A%A5%E5%91%8A)：离线报告样例目录。
+- [样例/offline/notice-通知/](./样例/offline/notice-%E9%80%9A%E7%9F%A5)：离线通知样例目录。
+- [样例/offline/request-请示/](./样例/offline/request-%E8%AF%B7%E7%A4%BA)：离线请示样例目录。
+- [样例/offline/minutes-纪要/](./样例/offline/minutes-%E7%BA%AA%E8%A6%81)：离线纪要样例目录。
+- [样例/offline/briefing-简报/](./样例/offline/briefing-%E7%AE%80%E6%8A%A5)：离线简报样例目录。
+- [样例/offline/special-report-情况专报/](./样例/offline/special-report-%E6%83%85%E5%86%B5%E4%B8%93%E6%8A%A5)：离线情况专报样例目录。
+- [样例/offline/presentation-汇报材料/](./样例/offline/presentation-%E6%B1%87%E6%8A%A5%E6%9D%90%E6%96%99)：离线汇报材料样例目录。
+- [样例/offline/summary-工作总结/](./样例/offline/summary-%E5%B7%A5%E4%BD%9C%E6%80%BB%E7%BB%93)：离线工作总结样例目录。
+- [样例/offline/work-plan-工作方案/](./样例/offline/work-plan-%E5%B7%A5%E4%BD%9C%E6%96%B9%E6%A1%88)：离线工作方案样例目录。
+- [样例/offline/speech-讲话稿/](./样例/offline/speech-%E8%AE%B2%E8%AF%9D%E7%A8%BF)：离线讲话稿样例目录。
+- [样例/offline/reply-回复函/](./样例/offline/reply-%E5%9B%9E%E5%A4%8D%E5%87%BD)：离线回复函样例目录。
+
+<a id="usage"></a>
+
+## 二、使用
+
+> 下面按 [快速上手](#quickstart) 的**三种模式**展开。先确认你属于哪种，只看对应小节即可；最后两节（最小示例、输出约定）三种模式通用。
+
+### （一）模式一 · 能装 skill 的工具（Codex / Claude Code）
+
+装好后（见 [一、安装](#install)）直接对话，无需复制提示词。
+
+**Codex / agents**：显式触发 skill——
+
+```text
+$official-document-drafting
+请根据材料起草一份情况专报
+```
+
+常见示例：
+
+- `搜索网络，生成一份关于“我的刀盾”网络传播情况的正式报告，并导出 Word。`
+- `搜索网络，生成一份关于“我的刀盾”网络动态简报，并导出 Word。`
+- `根据公开网络材料，起草一份关于开展“我的刀盾”传播素材整理工作的通知。`
+- `根据公开网络材料和内部安排，起草一份关于申请开展“我的刀盾”传播案例梳理工作的请示。`
+- `根据会议材料整理一份关于研究“我的刀盾”网络传播情况的专题会议纪要。`
+
+**Claude Code**：已安装到 `~/.claude/skills/` 或项目内 `./.claude/skills/` 后——
+
+```text
+/official-document-drafting
+请根据材料起草一份正式报告
+```
+
+如果你的 Claude Code 项目依赖 `CLAUDE.md`，也可把本仓库的规则和模板作为项目说明引入，但这不等同于 skill 安装。
+
+使用建议：
+
+- 这一模式最适合处理新闻、政策动态、公开网页材料整理；
+- 涉及“当前”“最新”“今日”等时效词时，应先核验来源和日期；
+- 如需保存文件但未指定路径，默认写入 `~/official-document-drafting-output/`（见 [（五）默认输出约定](#usage)）。
+
+对应的在线示例目录：
+
+- [样例/online/report-报告/](./样例/online/report-%E6%8A%A5%E5%91%8A)：围绕“我的刀盾”网络传播情况的报告样例。
+- [样例/online/briefing-简报/](./样例/online/briefing-%E7%AE%80%E6%8A%A5)：网络动态简报样例。
+- [样例/online/notice-通知/](./样例/online/notice-%E9%80%9A%E7%9F%A5)：传播素材整理工作的通知样例。
+- [样例/online/request-请示/](./样例/online/request-%E8%AF%B7%E7%A4%BA)：传播案例梳理工作的请示样例。
+- [样例/online/minutes-纪要/](./样例/online/minutes-%E7%BA%AA%E8%A6%81)：传播情况研究的会议纪要样例。
+- [样例/online/ministry-news-daily-部委动态日报/](./样例/online/ministry-news-daily-%E9%83%A8%E5%A7%94%E5%8A%A8%E6%80%81%E6%97%A5%E6%8A%A5)：`ministry-news-daily` skill 样例——汇总部委官网动态成每日《报告》（占位示例）。
+- [样例/online/policy-keyword-tracker-创新药政策跟踪/](./样例/online/policy-keyword-tracker-%E5%88%9B%E6%96%B0%E8%8D%AF%E6%94%BF%E7%AD%96%E8%B7%9F%E8%B8%AA)：`policy-keyword-tracker` skill 样例——围绕「创新药」跨部委检索政策成《情况专报》（占位示例）。
+
+### （二）模式二 · 网页版 AI 助手（联网：DeepSeek 网页版 / Claude.ai 等）
+
+不用安装。核心就一步：**复制对应文种的现成提示词，粘进对话框，再让它联网搜资料**。
+
+1. 打开目标文种的 `prompt.md` 全选复制。常用入口：
+   - 法定公文高频：[报告](./dist/offline/default/doc-types/report-%E6%8A%A5%E5%91%8A/prompt.md) / [通知](./dist/offline/default/doc-types/notice-%E9%80%9A%E7%9F%A5/prompt.md) / [请示](./dist/offline/default/doc-types/request-%E8%AF%B7%E7%A4%BA/prompt.md) / [纪要](./dist/offline/default/doc-types/minutes-%E7%BA%AA%E8%A6%81/prompt.md) / [函](./dist/offline/default/doc-types/letter-%E5%87%BD/prompt.md) / [批复](./dist/offline/default/doc-types/approval-%E6%89%B9%E5%A4%8D/prompt.md) / [通报](./dist/offline/default/doc-types/circular-%E9%80%9A%E6%8A%A5/prompt.md) / [意见](./dist/offline/default/doc-types/opinion-%E6%84%8F%E8%A7%81/prompt.md)。
+   - 常见正式材料：[简报](./dist/offline/default/doc-types/briefing-%E7%AE%80%E6%8A%A5/prompt.md) / [情况专报](./dist/offline/default/doc-types/special-report-%E6%83%85%E5%86%B5%E4%B8%93%E6%8A%A5/prompt.md) / [汇报材料](./dist/offline/default/doc-types/presentation-%E6%B1%87%E6%8A%A5%E6%9D%90%E6%96%99/prompt.md) / [工作总结](./dist/offline/default/doc-types/summary-%E5%B7%A5%E4%BD%9C%E6%80%BB%E7%BB%93/prompt.md) / [工作方案](./dist/offline/default/doc-types/work-plan-%E5%B7%A5%E4%BD%9C%E6%96%B9%E6%A1%88/prompt.md) / [讲话稿](./dist/offline/default/doc-types/speech-%E8%AE%B2%E8%AF%9D%E7%A8%BF/prompt.md) / [回复函](./dist/offline/default/doc-types/reply-%E5%9B%9E%E5%A4%8D%E5%87%BD/prompt.md)。
+   - 完整目录：[全部单文种 prompt](./dist/offline/default/doc-types/)。
+2. 粘进 DeepSeek 网页版 / Claude.ai 等对话框，补一句你的具体任务，例如：「请联网搜索『XX』的最新情况，据此起草，未核实处保留占位符。」
+3. 如果前端有单独的「系统提示词」输入框，就把文件里的 `# System Prompt` 和 `# User Prompt` 分开放；只有一个输入框时整份一起粘贴。
+4. 拿到 Markdown 成稿后，如需 Word，见 [五、Word 导出与版式](#word-export)。
+
+> 想按自己的素材定制提示词（而不是用现成的），可借用模式三的 `build.py`（需要本机有 Python）。
+
+### （三）模式三 · 内网离线（WebUI / Qwen / AnythingLLM，不能联网）
+
+和模式二用的是同一批 `prompt.md`，区别是**不能联网，素材得你自己准备**。本机有 Python 时，还能用 `build.py` 按你的素材现拼提示词。
+
+列出支持的文种：
+
+```bash
+python3 src/adapters/offline/build.py --list-doc-types
+```
+
+按你的素材生成可直接粘贴的提示词：
+
+```bash
+python3 src/adapters/offline/build.py \
+  --doc-type 通知 \
+  --instruction "起草一份关于开展2026年春季安全检查工作的通知，语气正式、结构清晰。" \
+  --material-file ./素材.md \
+  -o /tmp/20260404-春季安全检查通知-v01-提示词.md
+```
+
+如需附带当前文种范文示例，加 `--include-examples`：
+
+```bash
+python3 src/adapters/offline/build.py \
+  --doc-type 专报 \
+  --instruction "根据材料整理一份领导看的情况专报，先事实后研判。" \
+  --material-file ./news.md \
+  --include-examples \
+  -o /tmp/20260404-热点舆情情况专报-v01-提示词.md
+```
+
+把生成结果粘进本地前端：前端支持单独 system prompt 就把 `# System Prompt`／`# User Prompt` 分开，否则整份一起粘。
+
+建议标准路径：
+
+1. 优先用对应文种现成的 `prompt.md`；
+2. 素材很长时，先提炼成 `materials.md`；
+3. 模型仍易跑偏时，先用 `--task outline` 出提纲、确认结构再扩写：
+
+```bash
+python3 src/adapters/offline/build.py \
+  --task outline \
+  --doc-type 报告 \
+  --instruction "先根据材料输出报告提纲，不展开全文。" \
+  --material-file 样例/offline/report-报告/materials.md \
+  -o /tmp/20260405-报告提纲-提示词.md
+```
+
+**AnythingLLM**：把 `System Prompt` 放进 workspace instructions，把 `User Prompt` 作为当前输入，素材可直接上传到 workspace 或用 `--material-file` 拼入。
+
+**完整离线样例**（照着走一遍「原始素材 → 提炼 → 提示词 → 成稿 → Word」）：
+
+1. （可选，仅供人工提炼参考）翻一下 [样例/offline/raw-materials/…原始素材汇编](./样例/offline/raw-materials/20260404-%E6%88%91%E7%9A%84%E5%88%80%E7%9B%BE-%E5%8E%9F%E5%A7%8B%E7%B4%A0%E6%9D%90%E6%B1%87%E7%BC%96-v01.md)，了解素材出处；
+2. 进入目标文种目录，看它自己的 `task.md`、`materials.md`（已从原始素材提炼好），如 [样例/offline/report-报告/](./样例/offline/report-%E6%8A%A5%E5%91%8A)；
+3. **只喂该文种目录内的素材**生成提示词（生成阶段不读 `raw-materials/` 共享目录，运行时只需对这一个目录授读权）：
+
+```bash
+python3 src/adapters/offline/build.py \
+  --doc-type 报告 \
+  --instruction-file 样例/offline/report-报告/task.md \
+  --material-file 样例/offline/report-报告/materials.md \
+  -o 样例/offline/report-报告/20260404-关于“我的刀盾”网络传播情况的报告-v01-提示词.md
+```
+
+4. 把 `…-提示词.md` 粘进本地前端；
+5. 拿到成稿后导出 Word：
+
+```bash
+python3 src/renderers/docx.py \
+  样例/offline/report-报告/20260404-关于“我的刀盾”网络传播情况的报告-v01.md \
+  -o 样例/offline/report-报告/20260404-关于“我的刀盾”网络传播情况的报告-v01.docx \
+  --doc-type 报告
+```
+
+更多离线产物索引见 [样例/offline/README.md](./样例/offline/README.md) 与 [dist/offline/default/](./dist/offline/default/)。
+
+### （四）不同文体的最小示例
+
+进一步查看：
+
+- [docs/references/document-types.md](./docs/references/document-types.md)：各文种适用场景与边界说明。
+- [prompts/doc-types/](./prompts/doc-types)：全部单文种规则目录。
+- [assets/templates/](./assets/templates)：各文种兼容模板和骨架示例。
+- [样例/README.md](./样例/README.md)：按在线/离线和文种组织的示例索引。
+
+报告：
+
+```text
+根据以下材料整理一份情况报告，重点写清基本情况、主要问题和下一步打算。
+```
+
+通知：
+
+```text
+起草一份关于开展节前安全检查的通知，写明总体要求、重点任务和有关要求。
+```
+
+请示：
+
+```text
+根据项目推进情况，起草一份关于申请专项经费支持的请示，写明背景、依据和请示事项。
+```
+
+纪要：
+
+```text
+根据会议材料整理一份专题会议纪要，写清会议认为、会议决定、责任分工和后续要求。
+```
+
+### （五）默认输出约定
+
+> 输出路径的唯一权威主源是 [prompts/core/workflow.md](./prompts/core/workflow.md)；本节是面向读者的摘要，冲突时以主源为准。
+
+- 输出根目录：默认 `~/official-document-drafting-output/`；设置环境变量 `OFFICIAL_DOC_OUTPUT_DIR` 后以其为根目录（便于导向项目盘或共享盘）。用户已指定路径时以用户为准，默认不写入仓库目录内。
+- 子目录（按任务类型）：一般公文草稿 `drafts/`；部委动态日报 `news-reports/`（高频时可按 `news-reports/YYYYMMDD/` 分日）；关键词政策跟踪 `policy-tracking/<关键词>/`（按主题归档）。
+- 同名 `Markdown` 与 `Word` 文件默认放在同一目录；最终成稿命名 `YYYYMMDD-标题-vNN`，辅助文件加后缀 `-提示词`/`-说明`/`-materials`；同名不覆盖，递增 `-vNN`。
+
+命名示例：
+
+- Markdown：`~/official-document-drafting-output/news-reports/20260404-当前热点新闻报告-v01.md`
+- Word：`~/official-document-drafting-output/news-reports/20260404-当前热点新闻报告-v01.docx`
+- 离线提示词：`~/official-document-drafting-output/drafts/20260404-专项检查通知-v01-提示词.md`
+
+<a id="overview"></a>
+
+## 三、项目概览
+
+这是一个面向 agents、Codex、Claude Code 以及 WebUI / AnythingLLM / Qwen / Claude.ai 等提示词宿主的中文公文与正式材料仓库。它以 `prompts/` 为单一主源，统一生成：
+
+- 在线 skill 入口 [SKILL.md](./SKILL.md)
+- agents 元数据 [dist/skill/agents/openai.yaml](./dist/skill/agents/openai.yaml)
+- 默认离线系统提示词 [dist/offline/default/system_prompt.md](./dist/offline/default/system_prompt.md)
+- 默认单文种离线 prompt 目录 [dist/offline/default/doc-types/](./dist/offline/default/doc-types/)
+- 各文种兼容模板 [assets/templates/](./assets/templates)
+- 在线与离线完整样例 [样例/](./样例)
+
+其中，`src/adapters/` 不是“离线目录”，而是“面向不同消费端的适配层”：
+
+- `src/adapters/skill/`：把 `prompts/` 主源适配成 Codex、agents、Claude Code 等在线 skill / agent 宿主可直接使用的产物
+- `src/adapters/offline/`：把 `prompts/` 主源适配成 WebUI、AnythingLLM、Qwen、Claude.ai 等提示词宿主可直接使用的离线或半离线提示词产物
+
+完整的带注释目录结构见 [九 ·（三）目录结构](#build-and-maintain)。
+
+### （一）文种覆盖范围
+
+法定公文 `15` 种：决议、决定、命令（令）、公报、公告、通告、意见、通知、通报、报告、请示、批复、议案、函、纪要。
+
+常见正式材料 `7` 种：工作总结、工作方案 / 实施方案、讲话稿 / 发言稿、汇报材料、回复函、简报 / 信息简报 / 新闻简报、情况专报 / 信息专报 / 舆情专报。
+
+所有文种的适用场景和差异边界见 [docs/references/document-types.md](./docs/references/document-types.md)。
+
+<a id="capabilities"></a>
+
+## 四、当前能力
+
+可以处理：
+
+- 文种判断与路由：根据事项性质、行文方向、主送对象判断通知、报告、请示、函、纪要等文种
+- 共享规则 + 单文种规则：共享规则在 [prompts/core/](./prompts/core)，每个文种在 [prompts/doc-types/](./prompts/doc-types) 下有独立 `spec.md`
+- 要素分层：每类文体的结构元素按 `必备 / 常见 / 条件项 / 地方或系统样式 / 项目自定义` 分层，而不是无脑堆砌
+- 占位符补齐：用户未提供主送单位、落款、日期、联系人等信息时，默认保留占位符，不擅自虚构
+- Markdown 结构校验：检查必备章节、标题层级、常见漏项
+- `.docx` 导出：支持按文种自动套用字体方案和版式方案，导出结构化 Word 文件
+- 真实图片嵌入：当前已支持在 Markdown 中用独立图片块把本地 `png / jpg / jpeg` 嵌入 `.docx`
+- 附件 / 附图 / 附录图片说明：可为图片补充 `图号 / 标题 / 说明 / 注 / 来源 / 截至时间`
+- 版记下沉：如当前文种设置版记，导出时会尽量把版记整体压到最后一页底部
+- 文种与行文方向判定：起草前先用 [skills/doc-type-routing/](./skills/doc-type-routing) 按「行文方向＋目的＋是否需回应」三维收敛到正确文种
+- 部委动态日报：用 [skills/ministry-news-daily/](./skills/ministry-news-daily) 浏览各部委官网最新动态，汇总成一份每日《报告》，了解国家大事（文体为报告，样例见 [样例/online/ministry-news-daily-部委动态日报/](./样例/online/ministry-news-daily-部委动态日报)）
+- 关键词政策跟踪：用 [skills/policy-keyword-tracker/](./skills/policy-keyword-tracker) 围绕一个关键词（如「创新药」）跨部委检索政策，汇总成一份《情况专报》（文体为情况专报，样例见 [样例/online/policy-keyword-tracker-创新药政策跟踪/](./样例/online/policy-keyword-tracker-创新药政策跟踪)）
+
+当前不保证：
+
+- 未经核验的“最新新闻”真实性和完整性
+- 最终对外正式红头件版式完全符合某一单位内部模板
+- 未提供依据情况下的真实政策条款、文件号、会议结论和统计数据
+- 远程图片 URL、正文行内图片、复杂图文混排
+
+进一步查看：
+
+- [prompts/core/](./prompts/core)：共享规则主源目录。
+- [prompts/doc-types/](./prompts/doc-types)：单文种规则主源目录。
+- [dist/offline/default/doc-types/](./dist/offline/default/doc-types/)：默认 profile 下各文种独立离线 prompt。
+- [src/renderers/docx.py](./src/renderers/docx.py)：Word 导出语义化入口。
+- [src/renderers/validate.py](./src/renderers/validate.py)：结构校验语义化入口。
+
+<a id="word-export"></a>
+
+## 五、Word 导出与版式
+
+### （一）导出入口
+
+- 语义化入口：[src/renderers/docx.py](./src/renderers/docx.py)
+- 核心实现：[src/scripts/generate_docx.py](./src/scripts/generate_docx.py)
+- 薄路由 skill：[skills/docx-export/](./skills/docx-export)（导出、字体/页边距/页码调整与已知坑）
+
+最小导出：
+
+```bash
+python3 src/renderers/docx.py \
+  ~/official-document-drafting-output/drafts/20260404-专项检查通知-v01.md \
+  -o ~/official-document-drafting-output/drafts/20260404-专项检查通知-v01.docx
+```
+
+按文种自动套用字体和版式：
+
+```bash
+python3 src/renderers/docx.py \
+  ~/official-document-drafting-output/drafts/20260404-专项检查通知-v01.md \
+  -o ~/official-document-drafting-output/drafts/20260404-专项检查通知-v01.docx \
+  --doc-type 通知
+```
+
+查看当前解析后的字体与版式方案：
+
+```bash
+python3 src/scripts/generate_docx.py --doc-type 通知 --show-font-plan
+python3 src/scripts/generate_docx.py --doc-type 通知 --show-layout-plan
+```
+
+列出当前可用方案：
+
+```bash
+python3 src/scripts/generate_docx.py --list-font-profiles
+python3 src/scripts/generate_docx.py --list-layout-profiles
+```
+
+### （二）当前排版行为
+
+当前 `.docx` 导出已支持：
+
+- A4 页面
+- 页边距默认按 GB/T 9704-2012：上 37mm、下 35mm、左 28mm、右 26mm（版心 156mm×225mm，执行常数 `MARGIN_*_TWIPS` 位于 `src/docgen/constants.py`，经 `src/scripts/generate_docx.py` 再导出）
+- 按文种套用字体与版式方案
+- 标题、一级标题、二级标题、正文分字体字号
+- 正文首行缩进 2 字符
+- 标题自动均衡断行
+- 页脚页码默认自第二页起显示，首页不显示页脚，且页脚本身不写入显式底纹或高亮
+- 主送单位后不额外加段后距、落款前距、成文日期右空 4 字
+- 正文与落款之间默认空 3 行
+- 附注默认位于成文日期下一行左空 2 字
+- 如存在版记，版记整体压到最后一页底部，空间不足时整块移页
+
+当前基线版式和边界说明见 [docs/references/layout-rules.md](./docs/references/layout-rules.md)。
+
+如需关闭页码，可在导出时增加：
+
+```bash
+python3 src/renderers/docx.py \
+  ~/official-document-drafting-output/drafts/20260404-专项检查通知-v01.md \
+  -o ~/official-document-drafting-output/drafts/20260404-专项检查通知-v01.docx \
+  --hide-page-number
+```
+
+### （三）版头、发文字号、版记
+
+导出器支持以下结构块：
+
+- `## 版头（可选）`
+- `## 发文字号（可选）`
+- `## 版记（可选）`
+
+示例：
+
+```md
+## 版头（可选）
+XX市教育局文件
+
+## 发文字号（可选）
+X教发〔2026〕3号	签发人：张三
+
+## 标题
+关于开展2026年春季校园安全联合检查工作的通知
+```
+
+注意：
+
+- 版记不是所有文种的默认结构
+- 是否保留版记，取决于文种 `spec.md`、用户模板或系统样式
+- 标准公文常见版记要素通常是 `抄送机关、印发机关、印发日期`
+- `主送移入版记`、`分送`、`报/送/发` 属地方或系统样式
+- `审核` 属本项目内部模板字段
+
+进一步查看：
+
+- [docs/references/layout-rules.md](./docs/references/layout-rules.md)：当前基线版式与边界说明。
+- [prompts/layout-profiles/](./prompts/layout-profiles)：各版式方案配置目录。
+- [prompts/font-profiles/](./prompts/font-profiles)：各字体方案配置目录。
+- [src/scripts/generate_docx.py](./src/scripts/generate_docx.py)：Word 导出底层实现。
+
+<a id="images-attachments-appendices"></a>
+
+## 六、图片、附件与附录
+
+### （一）当前支持的图片方式
+
+当前版本已经支持在 Markdown 中用独立图片块把本地图片真实嵌入 `.docx`：
+
+```md
+![图1 现场照片](./样例/sample.png)
+```
+
+支持范围：
+
+本地文件、`png / jpg / jpeg`、独立图片块、路径相对当前 Markdown 文件解析。
+
+当前限制：
+
+不支持远程 URL、不支持正文行内图片、不支持 `webp`、不支持复杂环绕排版。
+
+### （二）推荐放置位置
+
+普通公文和内部材料中，图片默认更适合放在：
+
+`附件`、`附图`、`附表`。
+
+只有技术指南、操作手册、标准性说明、规范附表等更偏技术资料的文本，才默认允许使用：
+
+`附录A`、`附录B`。
+
+### （三）图片说明建议
+
+图片不要裸放，至少应包含：
+
+图片编号、图片标题、说明文字。
+
+按需要再补：
+
+`注`、`来源`、`截至时间`、`仅供示意，以正式图件为准`。
+
+示例：
+
+```md
+## 附件1（可选）
+
+图1：现场宣传海报
+
+![图1 现场宣传海报](./样例/poster.png)
+
+说明：活动现场设置的主题宣传海报。
+来源：项目组现场拍摄。
+截至时间：2026年4月。
+```
+
+进一步查看：
+
+- [prompts/core/style.md](./prompts/core/style.md)：图片说明和文字风格相关规则。
+- [prompts/core/workflow.md](./prompts/core/workflow.md)：附件、附图、附录等处理流程规则。
+- [样例/README.md](./样例/README.md)：带图片或附件结构的示例文稿索引。
+
+<a id="validation"></a>
+
+## 七、结构校验
+
+校验入口：
+
+- 语义化入口：[src/renderers/validate.py](./src/renderers/validate.py)
+- 核心实现：[src/scripts/check_sections.py](./src/scripts/check_sections.py)
+
+最小校验：
+
+```bash
+python3 src/renderers/validate.py notice ~/official-document-drafting-output/drafts/20260404-专项检查通知-v01.md
+```
+
+当前校验器会检查：
+
+- 必备章节是否缺失
+- 标题层级是否混乱
+- 一级 / 二级 / 三级标题写法是否明显异常
+- 是否存在常见结构漏项
+
+进一步查看：
+
+- [src/renderers/validate.py](./src/renderers/validate.py)：结构校验入口脚本。
+- [src/scripts/check_sections.py](./src/scripts/check_sections.py)：章节校验底层实现。
+- [skills/document-qa/](./skills/document-qa)：把结构校验与质量清单封装成的「公文质检」薄路由 skill。
+
+<a id="rules"></a>
+
+## 八、规则体系
+
+### （一）共享规则
+
+共享规则位于 [prompts/core/](./prompts/core)，主要负责：
+
+- 文种判断流程
+- 防编造与防幻觉约束
+- 通用语言风格
+- 标题与层级编号
+- 通用版式与导出边界
+- 附件、附注、版记、图片等共性要求
+
+关键文件：
+
+- [workflow.md](./prompts/core/workflow.md)：文种判断、结构补齐和处理流程总规则。
+- [drafting-thinking.md](./prompts/core/drafting-thinking.md)：撰写思路与语域——起笔四式、谋篇与行文方向的对应、省部级（中央·部委）语域、易混文种辨析、结尾用语强绑定。
+- [style.md](./prompts/core/style.md)：通用语言风格和表达约束。
+- [layout.md](./prompts/core/layout.md)：通用版式、导出和排版边界。
+- [doc-type-guardrails.md](./prompts/core/doc-type-guardrails.md)：防编造与事实核验总约束。
+
+联系人与附注规则：
+
+- 当前项目默认将 `请示、报告、通知、函、回复函、公告、通告` 设为保留附注联系人信息的文种。
+- 默认格式为：`（联系人：[联系人] 联系电话：[固定电话]，[手机号]）`
+- 这是本项目的默认起草口径，不等于所有公开样例都统一默认带联系人。
+- 如用户明确要求删除，可在生成后手动删减。
+- 是否最终保留，仍以具体文种规则、用户模板和单位制度为准。
+
+进一步查看：
+
+- [prompts/core/workflow.md](./prompts/core/workflow.md)：联系人、附注和结构保留的共享流程规则。
+- [prompts/core/layout.md](./prompts/core/layout.md)：附注位置与版式的共享规则。
+- [prompts/doc-types/request-请示/spec.md](./prompts/doc-types/request-请示/spec.md)：请示文种中的附注与联系人规则。
+- [prompts/doc-types/notice-通知/spec.md](./prompts/doc-types/notice-通知/spec.md)：通知文种中的联系人和附注规则。
+
+### （二）单文种规则
+
+每个文种目录都包含：
+
+- `meta.toml`：绑定 `font_profile` 与 `layout_profile`
+- `spec.md`：写作规则、版式要求、模板；可选 `## 撰写思路` 段，在该文种自己的文件里统一配置起笔、谋篇、语域与误区指引（留空则不输出，改完跑 `build_all.py` 即生效）
+- `examples.md`：按需提供示例
+
+例如：
+
+- [prompts/doc-types/notice-通知/](./prompts/doc-types/notice-通知)：通知文种规则目录。
+- [prompts/doc-types/report-报告/](./prompts/doc-types/report-报告)：报告文种规则目录。
+- [prompts/doc-types/request-请示/](./prompts/doc-types/request-请示)：请示文种规则目录。
+- [prompts/doc-types/minutes-纪要/](./prompts/doc-types/minutes-纪要)：纪要文种规则目录。
+
+### （三）要素分层
+
+当前版本不再把所有“可能出现的元素”都视为默认项，而是按文种分层解释：
+
+- `必备`：相对稳定、默认保留
+- `常见`：公开样例中高频出现，默认优先保留
+- `条件项`：只在特定场景出现，例如会议通知里的联系人、技术资料里的附录
+- `地方或系统样式`：属于地方、系统或单位模板习惯，不上升为全国通行必备项
+- `项目自定义`：本项目为了目标模板定制的口径，不冒充通用规范
+
+例如 `纪要` 中的 `主送 / 抄送 / 审核`，当前被明确标注为项目自定义内部模板字段，而不是所有纪要的通用国标版记。
+
+<a id="build-and-maintain"></a>
+<a id="repo-layout"></a>
+
+## 九、构建与目录说明
+
+### （一）单一主源维护顺序
+
+推荐维护顺序：
+
+1. 共享总规则：修改 [prompts/core](./prompts/core)
+2. 共享防编造约束：修改 [prompts/core/doc-type-guardrails.md](./prompts/core/doc-type-guardrails.md)
+3. 字体族和文件映射：修改 [assets/fonts/catalog.toml](./assets/fonts/catalog.toml)
+4. 复用型字体方案：修改 [prompts/font-profiles](./prompts/font-profiles)
+5. 复用型版式方案：修改 [prompts/layout-profiles](./prompts/layout-profiles)
+6. 单个文种规则：修改 [prompts/doc-types](./prompts/doc-types) 下对应目录
+7. profile 元数据和系统前言：修改 [prompts/profiles/](./prompts/profiles)
+8. 补充说明：按需修改 [docs/references/](./docs/references)（面向读者的同步参考文档，非主源；内容应回链上述主源，不在此处新增规则，一致性由 `tests/test_reference_consistency.py` 守护）
+
+### （二）构建命令
+
+一键构建：
+
+```bash
+python3 src/scripts/build_all.py
+```
+
+只构建在线 skill：
+
+```bash
+python3 src/adapters/skill/build.py
+```
+
+重建离线产物：
+
+```bash
+python3 src/adapters/offline/build.py
+```
+
+校验产物是否与 `prompts/` 主源同步（改了主源忘了重新构建时会失败，覆盖 SKILL.md、agent 接口、dist 副本和 `assets/templates/` 共 54 个文件）：
+
+```bash
+python3 src/adapters/skill/build.py --check
+python3 -m pytest -q   # 含 test_build_sync 同步守卫、references 一致性守卫、skills 路由防腐
+```
+
+上述 `--check` 与测试已接入 CI（[.github/workflows/ci.yml](./.github/workflows/ci.yml)），push 和 PR 时强制运行，任一漂移或测试失败即红。
+
+进一步查看：
+
+- [src/scripts/build_all.py](./src/scripts/build_all.py)：一键构建全部正式产物。
+- [src/adapters/skill/build.py](./src/adapters/skill/build.py)：在线 skill 产物构建入口，`--check` 校验同步。
+- [src/adapters/offline/build.py](./src/adapters/offline/build.py)：离线提示词产物构建入口。
+- [dist/](./dist)：构建完成后的正式产物目录。
+
+### （三）目录结构（tree 视图）
+
+第一层级精简为 8 个目录（`prompts/ src/ assets/ dist/ 样例/ docs/ skills/ tests/`）加少量根文件：
+
+```text
+.
+├── AGENTS.md                            Agent 全局基线（单一信息源、并行、中文优先、规则优先级）
+├── CLAUDE.md                            Claude Code 兼容入口（指回 AGENTS.md 与 prompts/ 主源）
+├── conftest.py                          pytest 根配置（把 src/ 加入导入路径）
+├── SKILL.md                             在线 skill 入口（由 prompts/ 生成）
+├── prompts/                             规则主源目录
+│   ├── core/                            共享规则主源（含 drafting-thinking.md 撰写思路与语域）
+│   ├── doc-types/                       单文种规则主源
+│   ├── font-profiles/                   字体方案主源
+│   ├── layout-profiles/                 版式方案主源
+│   └── profiles/                        构建 profile 和系统前言（default.toml）
+├── src/                                 全部代码
+│   ├── adapters/                        不同宿主环境的适配层（shared.py 兼容再导出层，实现拆分在 paths/profiles/doc_types/rendering + skill/build.py + offline/build.py）
+│   ├── scripts/                         底层脚本（build_all / generate_docx / check_sections）
+│   └── renderers/                       语义化渲染入口（docx.py / validate.py，转发到 scripts/）
+├── assets/                              静态资源（fonts/ 与字体映射 catalog.toml、templates/ 兼容模板）
+├── dist/                                正式构建产物目录
+│   ├── skill/                           自包含 references 模式 skill 包（SKILL.md + references/ + agents/openai.yaml）
+│   └── offline/                         离线提示词正式产物（default/）
+├── docs/                               说明文档
+│   ├── references/                      面向读者的规则说明（操作性规则以 prompts/core 为准）
+│   └── superpowers/plans/               历史实施计划
+├── skills/                              从本仓抽出的同源薄路由 skill
+│   ├── README.md                        skill 目录说明、单一信息源约定与无 agent 离线对应
+│   ├── docx-export/                     公文 Markdown → .docx 导出
+│   ├── document-qa/                     成稿结构与质量校验
+│   ├── doc-type-routing/                文种与行文方向判定
+│   ├── ministry-news-daily/             部委动态日报（文体：报告）
+│   ├── policy-keyword-tracker/          关键词政策跟踪（文体：情况专报）
+│   ├── offline-prompt-packager/         离线提示词打包
+│   └── skill-build/                     从 prompts/ 主源生成并校验产物
+├── tests/                               构建同步、references 一致性、skill 路由防腐等测试
+├── .github/workflows/ci.yml             CI：pytest + build --check 门禁
+└── 样例/                                示例文稿和导出样稿（online/ 与 offline/，含 README 索引）
+```
+
+<a id="fonts-and-deps"></a>
+
+## 十、字体与依赖
+
+### （一）Python 依赖
+
+当前版本的脚本只使用 Python 标准库（运行时零第三方依赖），[requirements.txt](./requirements.txt) 仍保留为统一依赖入口。
+
+如需按统一流程准备环境：
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+开发与 CI 工具依赖（pytest、ruff）见 [requirements-dev.txt](./requirements-dev.txt)：`python3 -m pip install -r requirements-dev.txt`。
+
+### （二）字体安装
+
+当前推荐做法：
+
+1. 下载字体到 [assets/fonts](./assets/fonts)
+2. 运行安装脚本
+3. 再执行 Word 导出
+
+下载最小字体集：
+
+```bash
+bash src/scripts/download_fonts.sh minimal
+```
+
+安装字体：
+
+```bash
+bash src/scripts/install_fonts.sh
+```
+
+也可以直接使用字体预设：
+
+```bash
+python3 src/renderers/docx.py \
+  ~/official-document-drafting-output/drafts/20260404-专项检查通知-v01.md \
+  -o ~/official-document-drafting-output/drafts/20260404-专项检查通知-v01.docx \
+  --font-preset noto-cjk
+```
+
+说明：
+
+- `.docx` 默认记录字体名称，不自动嵌入字体二进制
+- 如果需要稳定锁定视觉效果，应在已安装目标字体的机器上导出最终 PDF
+- 商用字体分发需自行确认授权边界
+
+<a id="compliance"></a>
+
+## 十一、合规与使用声明
+
+以下要求建议逐项理解并执行：
+
+1. **合规优先**：合规是第一要求。宁可留空、待核实，也不得编造；凡无法核实、依据不足、来源不明或口径冲突的内容，均应保守处理，不得为了成稿完整性强行补齐。
+2. **项目定位与非保证边界**：本项目仅提供公文模板、结构参考、语言规范化和排版导出辅助，不构成法律意见、政策解释、正式发文授权或任何保证性结论，也不当然代表某一单位最终定稿口径。
+3. **用途边界**：本项目仅用于辅助起草、整理、规范化中文公文与正式材料，不得用于伪造公文、冒用机关或单位名义、虚构会议、虚构批示、虚构事实、误导性报送、规避监管或其他违法违规用途。
+4. **真实性优先**：涉及政策依据、法律条款、文件号、机构名称、会议结论、领导表态、统计数据、时间地点和新闻事实的内容，均应以可核实来源为准；未经核实的内容，不得写成确定事实。
+5. **时效性内容必须复核**：对“当前”“最新”“今日”“近日”等时效性任务，必须同时核对来源、发布日期和事件发生日期；如无法核实，应明确标注“待核实”，而不是用经验补全。
+6. **不为润色而补造事实**：无论用户要求“润色、扩写、补全、规范化”，都只能在现有事实边界内展开，不得借机虚构背景、数字、依据、过程、表态或结论。
+7. **文种和程序边界**：文种判断应服从真实行文目的，不得把“请示”写成“报告”、把“函”写成“通知”、把内部沟通稿写成可直接对外发布的正式公文；用户或单位模板另有要求时，应以真实办文程序为准。
+8. **占位符不是事实**：主送单位、落款、日期、联系人、版记、审核、附件名称、会议元数据等占位符仅用于起草阶段补齐结构，不代表真实信息。正式使用前，必须逐项替换、删除或确认，不得带占位符直接报送、印发或公开。
+9. **项目自定义字段不等于通用规范**：本项目中的部分结构属于项目模板或系统样式，例如某些文种的附注联系人、纪要中的 `主送 / 抄送 / 审核` 等。这些字段用于提高起草效率，不当然代表全国统一通行格式，落地时仍须服从本单位模板和制度。
+10. **图片、附件与附录的合规责任**：当前版本支持附件图片说明和本地真实图片嵌入 `.docx`，但图片内容、图片来源、截图真实性、拍摄时间、版权授权和对外使用边界，均需由使用者自行确认。不得插入未经授权传播的图片、截图或涉敏感图件。
+11. **引用外部材料时要核来源和权限**：引用新闻、报告、统计、网页、截图、公众号、第三方图表、会议材料或其他外部文本时，应核对来源真实性、引用口径和转载授权；如来源不稳、时间不清或版权不明，应避免作为正式依据使用。
+12. **敏感信息与保密要求**：不得将国家秘密、工作秘密、商业秘密、个人敏感信息、未公开会议材料、内部台账、受限截图或其他未经授权披露的信息输入本项目或相关模型环境。涉及涉密、涉敏感、涉执法、涉舆情、涉人事、涉隐私内容时，应先做脱敏和权限判断。
+13. **对外发布前必须人工审核**：涉及正式发文、对外报送、政策解读、法律敏感、涉密、涉舆情、可能影响单位权责或公众判断的文本，必须经过有权限的人员人工审核后方可使用。模型生成稿只能视为草稿，不应直接等同于正式定稿。
+14. **版式导出不等于正式发文**：即使 `.docx` 已完成字体、版式、附注、版记、页码、图片等排版处理，也不代表当然符合某一单位最终发文模板。对外正式红头件、盖章件、签发件、编号件，仍应套用本单位现行 Word 模板并做最后核定。
+15. **最终清稿责任在使用者**：正式定稿前，应逐项检查错别字、漏字、多字、病句、标点误用、数字日期、机构名称、称谓、附件序号、图片说明、联系人信息、落款日期、占位符残留和文种是否用对。因使用、修改、发布或报送相关内容产生的责任，由最终使用者承担。
+16. **适用场景边界**：当前版本更适合内部草稿、内部流转稿、汇报稿、简报、专报和正式公文正文初稿；对外正式发文、盖章件、红头件和编号件，仍应使用本单位现行模板做最后核定。
+17. **复杂版式边界**：当前真实图片嵌入仅支持本地块级图片，不适合复杂宣传册式排版、远程图片混排或高度定制化图文页面。
+18. **模板替代边界**：文种默认模板和项目自定义字段是为了提高起草效率，不替代单位正式模板，不当然代表全国统一通行格式。
+19. **最终审定边界**：项目输出只能视为结构化草稿和排版辅助结果，不能替代单位内部审签、核稿、套版、编号、盖章和正式发文流程。
+
+<a id="principles"></a>
+
+## 十二、设计原则
+
+- 先判断文种是否正确，再润色语言
+- 先核对事实和时间，再整理成稿
+- 不把地方或系统样式误写成全国通行必备格式
+- Markdown 成稿与 `.docx` 导出分离，先定结构再做版式
+- 对图片、附件、附录、版记、附注等扩展要素，默认按“有依据才保留”的原则处理
+
+<a id="license"></a>
+
+## 十三、License
+
+- 仓库中的原创代码与文档采用 [MIT License](./LICENSE)
+- 第三方字体和其他二进制资源可能适用各自的许可条款，不因本仓库的 MIT 许可证而自动改变授权边界
+
+<a id="references"></a>
+
+## 十四、公开参考来源
+
+以下来源在项目规则演化过程中被反复用于核对文种边界、结构写法、版式口径和机关样例，按三个层次组织：根本依据、各文种样例来源、公文处理与格式细则参考。其中各文种样例的取证主源是对应 `prompts/doc-types/<id>/spec.md` 顶部注释，本节只是与其保持一致的汇总视图；改动 spec 注释后可运行 `python3 src/scripts/collect_sources.py` 从注释重新汇总，用输出核对本节的 URL 集合。
+
+### （一）根本依据（全国通行）
+
+- [GB/T 9704-2012《党政机关公文格式》](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=F3CC9BEF482524C895FDA7A08BB4A70E)（国家标准全文公开平台）
+- [《党政机关公文处理工作条例》](https://www.gov.cn/zwgk/2013-02/22/content_2337704.htm)（中办发〔2012〕14号，中国政府网）
+
+### （二）各文种样例来源
+
+各文种「撰写思路」对标的真实样例（部委以上级别 `.gov.cn` 公开来源，可核实；权威全文稀缺者依《党政机关公文处理工作条例》等通则归纳，无具体网址）。链接文本为从 URL 域名和路径推断的「来源机构 + 年份」，仅作导览，机构不确定的以域名标注：
+
+| 文种（id） | 样例来源 |
+| --- | --- |
+| 公告（announcement） | [中国政府网 2024](https://www.gov.cn/zhengce/zhengceku/202412/content_6995067.htm) · [最高人民法院](https://www.court.gov.cn/zixun/xiangqing/490131.html) |
+| 批复（approval） | [中国政府网 2025](https://www.gov.cn/zhengce/content/202510/content_7045361.htm) · [南京市规划和自然资源局 2024](https://ghj.nanjing.gov.cn/xwzx/tpxw/202409/t20240919_4767588.html) |
+| 简报（briefing） | [教育部 2025](https://hudong.moe.gov.cn/jyb_sjzl/s3165/202511/t20251120_1421001.html) · [教育部（简报栏目）](http://www.moe.gov.cn/jyb_sjzl/s3165/) · [中共江苏省委新闻网（工作简报栏目）](https://www.zgjssw.gov.cn/dangzuzhi/gzjb/) · [国家知识产权局（栏目）](https://www.cnipa.gov.cn/col/col431/index.html) · [青海省人大 2016](https://www.qhrd.gov.cn/qhsrd/zyfb/rdgzyj/201610/t20161014_24121.html) |
+| 通报（circular） | [中国政府网 2022](https://www.gov.cn/zhengce/content/2022-09/28/content_5713412.htm) · [中国政府网 2017](https://www.gov.cn/gongbao/content/2017/content_5204893.htm) · [生态环境部 2021](https://www.mee.gov.cn/zcwj/gwywj/202105/t20210511_832439.shtml) |
+| 公报（communique） | [中国政府网 2025](https://www.gov.cn/yaowen/liebiao/202510/content_7045444.htm) · [国家统计局 2025](https://www.stats.gov.cn/sj/zxfb/202502/t20250228_1958817.html) · [国家统计局（年度统计公报栏目）](https://www.stats.gov.cn/sj/tjgb/ndtjgb/qgndtjgb/index.html) |
+| 决定（decision） | [中国政府网 2026](https://www.gov.cn/zhengce/content/202602/content_7057147.htm) · [国家信访局 2019](https://www.gjxfj.gov.cn/gjxfj/fgwj/gwywj/webinfo/2019/09/1590610492778167.htm) |
+| 函（letter） | [中国政府网 2021](https://www.gov.cn/zhengce/content/2021-07/07/content_5623007.htm) · [国家发展改革委 2023](https://www.ndrc.gov.cn/xxgk/jianyitianfuwen/qgzxwytafwgk/202301/t20230112_1346393.html) · [生态环境部 2021](https://www.mee.gov.cn/xxgk2018/xxgk/xxgk06/202107/t20210722_849541.html) |
+| 纪要（minutes） | [生态环境部 2012（PDF）](https://www.mee.gov.cn/gkml/hbb/bgth/201203/W020120305457967669263.pdf) |
+| 议案（motion） | [中国政府网 2021](https://www.gov.cn/xinwen/2021-03/12/content_5592426.htm) · [中国政府网 2025](https://www.gov.cn/yaowen/liebiao/202503/content_7010013.htm) · [中国政府网 2024](https://www.gov.cn/yaowen/liebiao/202403/content_6938635.htm) · [贵州省财政厅 2024](https://czt.guizhou.gov.cn/zwgk/zdlyxx/czys/202408/t20240819_85405069.html) |
+| 通知（notice） | [国家移民管理局](https://www.nia.gov.cn/n741440/n741587/n931450/c1707539/content.html) |
+| 意见（opinion） | [生态环境部 2025（一）](https://www.mee.gov.cn/zcwj/zyygwj/202508/t20250825_1126119.shtml) · [生态环境部 2025（二）](https://www.mee.gov.cn/zcwj/zyygwj/202508/t20250828_1126302.shtml) |
+| 命令（令）（order） | [北京市政府 2024](https://www.beijing.gov.cn/zhengce/zhengcefagui/qtwj/202403/t20240312_3586914.html) · [中国政府网 2019](https://www.gov.cn/gongbao/content/2019/content_5383796.htm) · [司法部 2024](https://www.moj.gov.cn/pub/sfbgw/gwxw/xwyw/202412/t20241213_511162.html) · [中国人民银行南京分行](https://nanjing.pbc.gov.cn/goutongjiaoliu/113456/2164857/3025757/index.html) · [中国政府网 2025](https://www.gov.cn/yaowen/liebiao/202509/content_7039041.htm) |
+| 汇报材料（presentation） | [辽宁省应急管理厅 2023](https://yjgl.ln.gov.cn/yjgl/xcjy/xwxcdwgl/2023070415570916129/index.shtml) · [河北省生态环境厅](https://hbepb.hebei.gov.cn/hbhjt/ztzl/zhuanti/hbssthjtjgdj/xxyd/101593685538210.html) · [吉林省人社厅 2018](https://hrss.jl.gov.cn/dwgz/jgdj/zdwj/201801/t20180119_3653924.html) · [武汉市蔡甸区政府 2021（DOC）](https://www.caidian.gov.cn/zwgk/xxgkml/shfgfgg/202112/P020211210596912864126.doc) |
+| 通告（public-notice） | [重庆市公安局 2024](https://gaj.cq.gov.cn/zwgk/zcwj/qtgw/202411/t20241115_13802385.html) · [广州市公安局](https://gaj.gz.gov.cn/gkmlpt/content/5/5492/post_5492793.html) |
+| 回复函（reply） | [生态环境部 2023](https://www.mee.gov.cn/xxgk2018/xxgk/xxgk06/202307/t20230714_1036230.html) · [生态环境部 2019](https://www.mee.gov.cn/xxgk2018/xxgk/xxgk06/201908/t20190802_713220.html) · [生态环境部 2009](https://www.mee.gov.cn/gkml/zj/bgth/200910/t20091022_174321.htm) |
+| 报告（report） | [上海市松江区政府 2021](https://www.songjiang.gov.cn/govxxgk/SHSJ0/2021-09-29/1ce08ab5-3816-45a1-a9f3-ab121c923cf3.html) · [国家发展改革委（信息公开）](https://zfxxgk.ndrc.gov.cn/web/newsinfo.jsp?id=60) |
+| 请示（request） | 依权威通则归纳（无具体网址） |
+| 决议（resolution） | [中国政府网 2025](https://www.gov.cn/yaowen/liebiao/202503/content_7012944.htm) · [最高人民检察院 2025](https://www.spp.gov.cn/spp/2025lhzq/202503/t20250311_690166.shtml) · [中国政府网 2022](https://www.gov.cn/xinwen/2022-10/22/content_5720925.htm) · [全国人大 2022](http://www.npc.gov.cn/npc/kgfb/202210/e84ae34bbe6d4c14ad794987d3981e0c.shtml) |
+| 情况专报（special-report） | [spt.gov.cn 2023](https://www.spt.gov.cn/ztzl/scjg/bmdt/202302/t20230213_3954347.html) · [国家体育总局（PDF）](https://www.sport.gov.cn/gdnps/files/c25532145/26318321.pdf) · [湖北省商务厅 2025](https://swt.hubei.gov.cn/stdt/tzgg/202502/t20250220_5548476.shtml) · [北京市投资促进服务中心 2025](https://invest.beijing.gov.cn/zwgk/tzgg/202502/t20250210_4007241.html) · [浙江省经信厅 2023](https://jxt.zj.gov.cn/art/2023/6/16/art_1229123444_5126368.html) |
+| 讲话稿（speech） | [中国政府网 2025](https://www.gov.cn/yaowen/liebiao/202503/content_7012649.htm) · [外交部 2023](https://www.mfa.gov.cn/ziliao_674904/zt_674979/dnzt_674981/qtzt/twwt/xjpzsjstzyjh/202304/t20230410_11056977.html) |
+| 工作总结（summary） | [常州市政府](https://www.changzhou.gov.cn/gi_news/35175030329229) · [中国证监会](https://www.csrc.gov.cn/csrc/c105752/c7547616/content.shtml) |
+| 工作方案（work-plan） | [生态环境部 2024](https://www.mee.gov.cn/zcwj/gwywj/202408/t20240806_1083433.shtml) · [中国政府网 2025](https://www.gov.cn/zhengce/202504/content_7020852.htm) |
+
+### （三）公文处理与格式细则参考
+
+- [沈阳市人民政府：关于进一步规范行政机关公文处理工作的通知](https://www.shenyang.gov.cn/zwgk/zcwj/zfwj/szfbgtwj1/202112/t20211201_1701386.html)
+- [辽宁省人民政府办公厅：关于印发《辽宁省行政机关公文格式细则》的通知](https://www.ln.gov.cn/web/zwgkx/zfwj/szfbgtwj/zfwj2004/7ED90F8968BD491FB190A231069CA87B/index.shtml)
+- [紫阳县人民政府：关于规范政府机关公文格式的通知](https://www.zyx.gov.cn/Content-1778525.html)
+- [安康市人民政府：党政机关公文处理如何走向“统一”](https://www.ankang.gov.cn/Content-2060366.html)
+- [平凉市发改委：机关公文处理实施细则](https://fgw.pingliang.gov.cn/gzzd/art/2022/art_58cb4a2b5abe4509a554bc7951638496.html)
+
+<a id="feedback"></a>
+
+## 十五、反馈与贡献
+
+- **项目地址**：https://github.com/zhaohui-yang/official-document-drafting
+  （此地址也写在 skill 元数据 `skill_metadata.openclaw.homepage` 中，安装为 skill 后宿主可直接定位本仓。）
+- **提问题 / 报 bug / 提建议**：欢迎到本仓库的 GitHub Issues 提交。
+  - 新建：https://github.com/zhaohui-yang/official-document-drafting/issues/new/choose
+  - 已有：https://github.com/zhaohui-yang/official-document-drafting/issues
+  - 请尽量说明：使用场景（在线 skill / 离线提示词 / Word 导出）、复现步骤或输入、期望与实际结果、涉及的文种或文件路径。
+- **使用求助 / 咨询**：见 [SUPPORT.md](./SUPPORT.md)。
+- **贡献代码或规则**：先读 [CONTRIBUTING.md](./CONTRIBUTING.md)（遵守单一信息源纪律：改 `prompts/` 主源、不手改生成产物，提交前跑 `python3 src/scripts/build_all.py --check` 与 `python3 -m pytest`）。
+- 维护与协作统一通过 GitHub Issues / Pull Request 进行。

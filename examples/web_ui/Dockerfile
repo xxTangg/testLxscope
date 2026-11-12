@@ -10,9 +10,6 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
-ARG VITE_AGENTSCOPE_API_PORT=8001
-ENV VITE_AGENTSCOPE_API_PORT=${VITE_AGENTSCOPE_API_PORT}
-
 RUN pnpm --filter frontend build
 
 FROM nginx:alpine

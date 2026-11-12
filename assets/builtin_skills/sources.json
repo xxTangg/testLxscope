@@ -1,0 +1,62 @@
+[
+  {
+    "name": "data-cleaning",
+    "repository": "https://github.com/magnus919/agent-skills",
+    "ref": "92c327e525da69c9ad3812fd223a1770e977c2e3",
+    "path": "data-cleaning"
+  },
+  {
+    "name": "documents",
+    "repository": "https://github.com/magnus919/agent-skills",
+    "ref": "92c327e525da69c9ad3812fd223a1770e977c2e3",
+    "path": "documents"
+  },
+  {
+    "name": "excel-word-link",
+    "repository": "https://github.com/qshanx/excel-word-link",
+    "ref": "9c2b2fd3479d405494b399db4a3e3ab91d62163f",
+    "path": "."
+  },
+  {
+    "name": "fcs-reconcile",
+    "repository": "https://github.com/cxtx/finance-copilot-skills",
+    "ref": "f501f033c2ad517a7140e993e9ef3ab66c131bbf",
+    "path": "skills/fcs-reconcile"
+  },
+  {
+    "name": "gov-enterprise-meeting-minutes",
+    "repository": "https://github.com/xulei-0221/gov-enterprise-meeting-minutes",
+    "ref": "50eb9e542a684fab5785e4fc477dcdb34843f0cb",
+    "path": "."
+  },
+  {
+    "name": "internal-comms",
+    "repository": "https://github.com/anthropics/skills",
+    "ref": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+    "path": "skills/internal-comms"
+  },
+  {
+    "name": "official-document-drafting",
+    "repository": "https://github.com/zhaohui-yang/official-document-drafting",
+    "ref": "6b4166a50b96733684b36da6336ea85a847cf3be",
+    "path": "."
+  },
+  {
+    "name": "resume-scorer",
+    "repository": "https://github.com/myrice12/resume-scorer-skill",
+    "ref": "f43f245f11ca09b8860486664a5e1dfa320a823d",
+    "path": "."
+  },
+  {
+    "name": "technical-project-management",
+    "repository": "https://github.com/magnus919/agent-skills",
+    "ref": "92c327e525da69c9ad3812fd223a1770e977c2e3",
+    "path": "technical-project-management"
+  },
+  {
+    "name": "zh-tech-writing",
+    "repository": "https://github.com/leter/zh-tech-writing",
+    "ref": "ffda9353768dece8aabd26ccb3a4978025e9437c",
+    "path": "skills/zh-tech-writing"
+  }
+]

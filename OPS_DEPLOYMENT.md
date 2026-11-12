@@ -18,15 +18,8 @@ http://<服务器公网 IP 或内网 IP>:8000
 http://192.168.1.20:8080
 ```
 
-当前版本的 Web UI 和 API 是两个容器，浏览器还必须能够访问 API 端口：
-
-```text
-http://<服务器 IP 或域名>:8001
-```
-
-`8001` 是 `AGENTSCOPE_API_PORT` 的默认值。用户不需要直接在浏览器中打开
-API 地址，但 Web UI 会从用户浏览器向该地址发起请求，所以只开放 `8000`
-而不开放 `8001` 会导致页面能打开、聊天和其他功能却无法使用。
+前端 Nginx 会把 `/api/` 请求转发到 Compose 内部的 `agentscope` 服务。用户只需访问
+Web UI 地址；后端 API 和 Redis 都不发布到宿主机端口。
 
 注意：`localhost` 或 `127.0.0.1` 指的是当前浏览器所在的电脑。服务器部署后，
 用户不能访问 `http://localhost:8000`，除非浏览器就在服务器上；用户应使用服务器
@@ -36,22 +29,22 @@ API 地址，但 Web UI 会从用户浏览器向该地址发起请求，所以�
 
 | 服务 | 容器端口 | 服务器端口 | 用途 |
 | --- | ---: | ---: | --- |
-| `web-ui` | 80 | `WEB_UI_PORT`，默认 `8000` | 用户访问的前端页面 |
-| `agentscope` | 8000 | `AGENTSCOPE_API_PORT`，默认 `8001` | Web UI 调用的后端 API |
+| `web-ui` | 80 | `WEB_UI_PORT`，默认 `8000` | 前端页面；Nginx 同时代理 `/api/` 到后端 |
+| `agentscope` | 8000 | 不映射到宿主机 | 后端 API，只允许 Compose 内部访问 |
 | `redis` | 6379 | 不映射到宿主机 | 后端存储，只允许 Compose 内部访问 |
 
 默认访问链路如下：
 
 ```text
-用户浏览器
-   ├── http://服务器:8000  ──> web-ui
-   └── http://服务器:8001  ──> agentscope API ──> redis
+用户浏览器 ── http://服务器:8000 ──> web-ui Nginx
+                                      ├── 页面请求 ──> 静态前端
+                                      └── /api/* ──> agentscope:8000 ──> redis
 ```
 
 ## 2. 服务器要求
 
 - Linux 服务器，已安装 Docker Engine 和 Docker Compose v2
-- 用户网络能够访问 Web UI 端口和 API 端口
+- 用户网络能够访问 `WEB_UI_PORT`（默认 `8000`）
 - 服务器能够访问配置的模型 API；离线内网环境需要确保模型 API 在内网可达
 - 至少准备一个可用的 OpenAI-compatible 模型 API Key
 
@@ -90,6 +83,9 @@ cp .env.example .env
 - `OPS_DEPLOYMENT.md`
 - `manifest.json`：镜像包 SHA256
 
+镜像归档使用打包机器 Docker 的 Linux 架构；请在与目标服务器架构一致的 Linux/amd64
+或 Linux/arm64 Docker 环境中打包。`manifest.json` 会标明归档的平台。
+
 将整个目录复制到服务器后执行：
 
 ```bash
@@ -111,9 +107,6 @@ docker compose up -d --no-build
 # 用户浏览器访问的 Web UI 端口
 WEB_UI_PORT=8000
 
-# 浏览器调用 AgentScope API 的端口
-AGENTSCOPE_API_PORT=8001
-
 # 默认登录账号。user_id 是后端数据隔离使用的稳定标识
 AGENTSCOPE_USERNAME=admin
 AGENTSCOPE_USER_ID=local-user
@@ -129,24 +122,7 @@ AGENTSCOPE_DOWNLOAD_SECRET=请替换为随机长字符串
 # 可选，但生产环境建议设置
 REDIS_PASSWORD=请设置 Redis 密码
 
-# 示例：SiliconFlow OpenAI-compatible API
-SILICONFLOW_API_KEY=你的 API Key
-SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
-SILICONFLOW_CHAT_MODEL=deepseek-ai/DeepSeek-V3.2
-SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
-SILICONFLOW_EMBEDDING_DIMENSIONS=1024
 ```
-
-`AGENTSCOPE_API_PORT` 会在构建 Web UI 时写入前端。如果修改了这个端口，
-必须重新构建 `web-ui` 镜像：
-
-```bash
-docker compose up -d --build
-```
-
-只修改 `.env` 后执行 `docker compose restart` 不会更新已经构建好的前端配置。
-离线部署时，必须在打包前使用目标 API 端口构建镜像；`--no-build` 不会重新写入
-前端配置。
 
 默认配置创建一个账号。若需要多个用户，可在 `.env` 中设置
 `AGENTSCOPE_AUTH_USERS`，每个账号必须使用不同的 `user_id`：
@@ -181,6 +157,8 @@ docker compose ps
 ```
 
 三个服务状态均应为 `running`，并且 `agentscope`、`web-ui` 的健康检查应通过。
+升级已有部署时执行上述 `docker compose up -d --build`，Compose 会移除后端的宿主机
+端口映射且保留数据卷；也请删除云安全组或防火墙中旧的 `8001` 放行规则。
 
 ## 6. 部署后检查
 
@@ -191,50 +169,44 @@ docker compose ps
 curl -I http://127.0.0.1:8000
 # 如果修改过 WEB_UI_PORT，请把上面的 8000 换成实际端口。
 
-# API 公开存活探针应返回 204
-curl -i http://127.0.0.1:8001/auth/health
-# 如果修改过 AGENTSCOPE_API_PORT，请把上面的 8001 换成实际端口。
+# 经 Web UI Nginx 代理的 API 存活探针应返回 204
+curl -i http://127.0.0.1:8000/api/auth/health
+# 如果修改过 WEB_UI_PORT，请替换上面的 8000。
 ```
 
 如果本机正常、用户电脑访问失败，通常是云服务器安全组或系统防火墙没有放行
-端口。以内网用户网段为例：
+Web UI 端口。以内网用户网段为例：
 
 ```bash
 sudo ufw allow from <用户网段> to any port 8000 proto tcp
-sudo ufw allow from <用户网段> to any port 8001 proto tcp
 ```
 
-如果确实需要公网访问，请根据实际安全策略限制来源 IP；不要对公网开放 Redis
-的 `6379` 端口。
+后端 API 和 Redis 只通过 Compose 内部网络访问，不需要开放宿主机端口。
 
 ## 7. 用户首次访问
 
 1. 运维人员确认服务器 IP 或 DNS 已指向部署服务器。
 2. 在浏览器打开 `http://<服务器 IP 或域名>:8000`。
 3. 使用 `.env` 中配置的用户名和密码登录。
-4. 如果页面出现服务设置页，在“服务器地址”中填写
-   `http://<服务器 IP 或域名>:8001` 并提交。
-5. 如果页面能打开但提示无法连接服务，检查用户电脑到 `8001` 的网络连通性，
-   以及浏览器保存的服务地址是否仍为 `localhost`。
+4. 前端通过当前站点的 `/api/` 路径访问后端，无需填写 API 地址。
 
-用户访问的核心地址可以按下面的规则计算：
+用户只需要访问一个地址：
 
 ```text
-Web UI = http(s)://<服务器地址>:<WEB_UI_PORT>
-API    = http(s)://<服务器地址>:<AGENTSCOPE_API_PORT>
+Web UI 和 API = http(s)://<服务器地址>:<WEB_UI_PORT>
+API 路径      = /api/*（由 Web UI Nginx 转发到后端）
 ```
 
-如果使用 HTTPS，Web UI 和 API 都应使用 HTTPS；否则浏览器可能阻止从 HTTPS
-页面请求 HTTP API（混合内容）。
+使用 HTTPS 时，反向代理只需为这个域名配置证书。浏览器的 API 请求与页面同源，
+不需要额外开放后端端口，也不会产生跨域或混合内容请求。
 
 ## 8. 使用域名和反向代理
 
-当前 Compose 默认是双端口部署。生产环境可以用 Nginx 或 Traefik 提供域名和
-HTTPS。最简单的方式是为 UI 和 API 配置两个域名：
+Compose 内的 Web UI Nginx 已将 `/api/` 代理到后端。生产环境若需域名和 HTTPS，
+外部 Nginx 或 Traefik 只需代理到 Web UI 的宿主机端口：
 
 ```text
-https://agent.example.com      -> 127.0.0.1:8000
-https://api.agent.example.com  -> 127.0.0.1:8001
+https://agent.example.com -> 127.0.0.1:8000
 ```
 
 Nginx 示例：
@@ -248,44 +220,25 @@ server {
     # ssl_certificate ...;
     # ssl_certificate_key ...;
 
+    client_max_body_size 500m;
+
     location / {
         proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-
-server {
-    listen 443 ssl;
-    server_name api.agent.example.com;
-
-    # 此处配置证书
-    # ssl_certificate ...;
-    # ssl_certificate_key ...;
-
-    location / {
-        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
+        proxy_request_buffering off;
         proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
 ```
 
-此时用户主要打开 `https://agent.example.com`。首次使用时访问
-`https://agent.example.com/setup`，将 API 地址设置为
-`https://api.agent.example.com`。当前前端默认通过“同一主机名 + API 端口”推导
-API 地址，因此使用两个域名时需要在设置页保存 API 地址。
-
-如果要求用户只能使用一个域名和一个端口，需要额外实现 `/api` 路径代理，
-并让前端所有 API 请求使用 `/api` 前缀；当前默认 `nginx.conf` 只负责静态 Web UI
-和 SPA 路由，不包含该反向代理配置。不能只开放 Web UI 端口就认为单地址部署已经
-完成。
+用户打开 `https://agent.example.com` 后登录即可。外部代理把所有请求转到 Web UI；
+容器内的 Nginx 再将 `/api/` 请求转给后端，并处理流式响应和较大的上传。
 
 ## 9. 常用运维命令
 
@@ -314,20 +267,19 @@ docker compose down
 | 现象 | 处理方式 |
 | --- | --- |
 | 浏览器打不开 `:8000` | 检查 `web-ui` 状态、服务器端口映射、安全组和防火墙 |
-| 页面能打开，但聊天失败 | 检查用户电脑是否能访问 `:8001`，以及 API 地址是否正确 |
-| 改了 API 端口但前端仍访问旧端口 | 执行 `docker compose up -d --build` 重新构建 Web UI |
+| 页面能打开，但 API 请求失败 | 检查 `http://127.0.0.1:8000/api/auth/health`、`web-ui` 日志及 Compose 网络 |
 | API 返回 503 或服务未就绪 | 查看 `docker compose logs agentscope redis`，确认 Redis 和模型配置正常 |
 | 用户被分到错误的数据空间 | 检查 `AGENTSCOPE_AUTH_USERS`，确保每个账号使用唯一且稳定的 `user_id` |
 | 服务器本机正常，外部访问失败 | 检查云安全组、UFW/iptables、公司网络和 DNS |
 
 ## 11. 生产环境安全检查
 
-- 使用 HTTPS，并为 Web UI 和 API 配置一致的安全策略。
+- 使用 HTTPS，并通过 Web UI 的同源 `/api/` 代理访问后端。
 - 替换默认登录密码和 `AGENTSCOPE_JWT_SECRET`，不要把真实值提交到 Git。
 - 当前 JWT 是轻量账号隔离方案；如需管理员后台、密码找回、撤销 token、权限角色或抵御恶意攻击，再接入完整账号体系或公司 SSO。
 - 将 `AGENTSCOPE_DOWNLOAD_SECRET` 替换成随机长字符串。
 - 设置 Redis 密码，并确认 Redis 端口没有映射到公网。
-- API 端口只允许用户网段或反向代理访问。
+- 后端 API 不发布宿主机端口，只允许 Compose 内部网络和 Web UI 代理访问。
 - 定期备份 Docker 数据卷：`redis-data`、`agentscope-workspaces`、
   `agentscope-blobs` 和 `qdrant-data`。
-- 模型 API Key 可放在服务器 `.env` 中，或通过网页「凭证」页面保存到后端存储；不要提交到 Git，也不要写入前端代码。
+- 在网页「凭证」页面配置 `longxin_AI`，由后端保存模型 API Key。请勿将 Key 提交到 Git 或写入前端代码。

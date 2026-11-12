@@ -6,6 +6,9 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $ComposeFile = Join-Path $ProjectRoot "docker-compose.yml"
+$BackendImage = "testlxscope-intranet:latest"
+$WebUiImage = "testlxscope-web-ui:latest"
+$RedisImage = "redis:7-alpine"
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $OutputDir = Join-Path $ProjectRoot "dist\agentscope-offline-$Stamp"
 $TarFile = Join-Path $OutputDir "agentscope-images.tar"
@@ -28,19 +31,32 @@ if (-not $SkipBuild) {
     Invoke-Docker @("compose", "-f", $ComposeFile, "build", "agentscope", "web-ui")
 }
 try {
-    Invoke-Docker @("image", "inspect", "redis:7-alpine")
+    Invoke-Docker @("image", "inspect", $RedisImage) | Out-Null
 }
 catch {
-    Invoke-Docker @("pull", "redis:7-alpine")
+    Invoke-Docker @("pull", $RedisImage)
 }
 Invoke-Docker @(
     "save"
     "--output"
     $TarFile
-    "agentscope-intranet:latest"
-    "agentscope-web-ui:latest"
-    "redis:7-alpine"
+    $BackendImage
+    $WebUiImage
+    $RedisImage
 )
+
+$Platforms = @(
+    $BackendImage
+    $WebUiImage
+    $RedisImage
+) | ForEach-Object {
+    (Invoke-Docker @("image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", $_)).Trim()
+}
+$UniquePlatforms = @($Platforms | Select-Object -Unique)
+if ($UniquePlatforms.Count -ne 1) {
+    throw "All images in an offline package must use the same platform. Found: $($UniquePlatforms -join ', ')"
+}
+$Platform = $UniquePlatforms[0]
 
 Copy-Item $ComposeFile (Join-Path $OutputDir "docker-compose.yml")
 Copy-Item (Join-Path $ProjectRoot ".env.example") (Join-Path $OutputDir ".env.example")
@@ -50,10 +66,11 @@ $Hash = (Get-FileHash -Algorithm SHA256 $TarFile).Hash
 @{
     generated_at = (Get-Date).ToString("o")
     images = @(
-        "agentscope-intranet:latest"
-        "agentscope-web-ui:latest"
-        "redis:7-alpine"
+        $BackendImage
+        $WebUiImage
+        $RedisImage
     )
+    platform = $Platform
     image_archive = "agentscope-images.tar"
     sha256 = $Hash
 } | ConvertTo-Json | Set-Content (Join-Path $OutputDir "manifest.json") -Encoding UTF8

@@ -1,0 +1,7 @@
+{
+  "name": "fcs-reconcile",
+  "repository": "https://github.com/cxtx/finance-copilot-skills",
+  "ref": "f501f033c2ad517a7140e993e9ef3ab66c131bbf",
+  "path": "skills/fcs-reconcile",
+  "adaptation": "2026-10-21: Chinese discovery metadata, local-only inputs and outputs, host-neutral paths; original license retained."
+}

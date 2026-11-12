@@ -1,6 +1,7 @@
 import { ChevronDown, PlusCircle, Ban } from 'lucide-react';
 
 import type { ChatModelConfig } from '@/api';
+import { LONGXIN_AI_LABEL } from '@/api/credential';
 import { Button } from '@/components/ui/button';
 import {
 	DropdownMenu,
@@ -94,7 +95,7 @@ export function LlmSelect({
 							<DropdownMenuGroup key={type}>
 								{idx > 0 && <DropdownMenuSeparator />}
 								<DropdownMenuLabel>
-									{type.replace(/_credential$/, '')}
+									{LONGXIN_AI_LABEL}
 								</DropdownMenuLabel>
 								{isSingle
 									? usable[0].models.map((m) => (

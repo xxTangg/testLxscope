@@ -1,0 +1,57 @@
+# fcs-reconcile 目录元数据（FT-01）。工具集 catalog 可由各 Skill 的本文件生成。
+name: fcs-reconcile
+display_name: 对账
+description: 核对银行流水与收付款台账/应收应付/双系统明细，定位差异并输出人工复核底稿。
+
+# 隐私等级：high = 处理银行账户、交易明细等高敏数据，默认本地隔离 + 禁网
+privacy_level: high
+
+# 版本（三者独立演进，发布时一并记录）。
+# 层级、bump 时机与漂移守卫见 docs/governance/versioning.md；单 Skill 阶段
+# skill_version 与工具集版本（pyproject.toml）对齐，第 2 个 Skill 落地后解耦。
+skill_version: "0.3.0"
+rule_version: "1.0"
+contract_version: "1.0"
+
+# 发布状态：Experimental → Preview → Stable → Deprecated → Retired
+# 0.3.0 转 Preview。不是 Stable：PRD §10.2 定义 Stable = 契约稳定 + 完成正式测试，
+# 而「契约稳定」需真实用户跑过至少一个业务周期来证明，那是阶段 C 的前置。
+status: Preview
+
+# 许可证。本目录随附一份 LICENSE 副本：安装方式是复制本目录到宿主的 skills/ 下，
+# 根仓库的 LICENSE 不会跟着走，而 MIT 要求所有副本都包含版权与许可声明。
+license: MIT
+
+# 平台支持：verified = 已验证；compatible = 已提供安装提示词（两者不互斥——
+# compatible 回答"能不能装"，verified 回答"验没验过"）。
+# 定义、路径表与 9 项验证项见 docs/governance/agent-install.md。
+#
+# ⚠ 这两家的验证等级是「使用验证」而非「逐项走查」：依据是开发者在多个真实项目中
+# 反复安装并跑通，9 项中 6 项由实际使用覆盖，权限确认/网络限制/错误处理 3 项未在
+# 宿主内确认。逐项状态与待补测清单见 tests/cross_platform/records/。
+platforms:
+  verified: [claude-code, codex]
+  compatible: [claude-code, codex, workbuddy]   # workbuddy 仍仅格式兼容，未实际使用过
+
+# 适用 / 不适用
+applicable: [银行对账, 应收回款核对, 应付付款核对, 双系统明细核对]
+not_applicable: [报表生成, 数据清洗, 凭证过账, 税务判断, 联网登录外部系统]
+
+# 输入 / 输出类型
+io:
+  input: [xlsx, csv]
+  output: [xlsx, "manifest.json"]
+
+# 运行时依赖（由 tools/build 从 uv.lock 导出带哈希的 requirements.txt）
+dependencies: [pandas, openpyxl]
+
+# 测试状态
+tests:
+  unit: passing
+  property: passing
+  golden: passing
+  security: passing
+  # self-tested = 开发者在多项目实际使用中验证，**不是** PRD §10.1 定义的独立前向测试
+  # （不预知答案的独立执行者）。开发者越熟悉本 Skill，越不能代表陌生用户，因此这里
+  # 不写 passing。补做独立测试后转 passing，报告落 tests/forward/。
+  forward: self-tested

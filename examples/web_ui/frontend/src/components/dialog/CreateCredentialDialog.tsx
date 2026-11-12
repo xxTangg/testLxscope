@@ -124,6 +124,7 @@ export function CreateCredentialDialog({ open, onOpenChange, onCreated, defaultT
 						<SchemaForm
 							schema={selectedSchema}
 							values={values}
+							helpFor={(key) => t(`credentialFieldHelp.${key}`, { defaultValue: '' })}
 							onChange={(key, val) => setValues((prev) => ({ ...prev, [key]: val }))}
 						/>
 					)}

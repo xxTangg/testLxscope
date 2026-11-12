@@ -1,11 +1,15 @@
 import { toast } from 'sonner';
 
-const getDefaultBaseUrl = () => {
-	const port = import.meta.env.VITE_AGENTSCOPE_API_PORT ?? '8001';
-	return `${window.location.protocol}//${window.location.hostname}:${port}`;
-};
+const API_BASE_PATH = '/api/';
 
-export const getBaseUrl = () => localStorage.getItem('server_url') ?? getDefaultBaseUrl();
+// Older versions saved a direct backend URL (usually :8001). Drop it once so
+// existing browsers move to the same-origin API proxy without manual setup.
+if (typeof window !== 'undefined') localStorage.removeItem('server_url');
+
+export const getBaseUrl = () => `${window.location.origin}${API_BASE_PATH}`;
+
+export const buildApiUrl = (path: string) =>
+	new URL(path.replace(/^\/+/, ''), getBaseUrl());
 const ACCESS_TOKEN_KEY = 'agentscope_access_token';
 
 export const getAccessToken = () => localStorage.getItem(ACCESS_TOKEN_KEY);
@@ -37,8 +41,6 @@ interface RequestOptions {
 	/** When true, suppresses the automatic error toast. Useful when the caller shows its own inline error UI. */
 	silent?: boolean;
 	signal?: AbortSignal;
-	/** Overrides the stored server URL. Lets the setup page probe an address before persisting it. */
-	baseUrl?: string;
 	/** Public endpoints such as login opt out of the bearer token. */
 	authenticated?: boolean;
 	/** Gives up after this many ms and reports {@link TIMEOUT_STATUS}. Off by default — a streaming chat is meant to stay open. */
@@ -76,11 +78,10 @@ async function streamRequest(path: string, options: RequestOptions = {}): Promis
 		params,
 		signal,
 		silent = false,
-		baseUrl,
 		authenticated = true,
 		timeoutMs,
 	} = options;
-	const url = new URL(path, baseUrl ?? getBaseUrl());
+	const url = buildApiUrl(path);
 	if (params) {
 		Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
 	}
@@ -143,7 +144,6 @@ export const client = {
 		params?: Record<string, string>,
 		options?: {
 			silent?: boolean;
-			baseUrl?: string;
 			authenticated?: boolean;
 			timeoutMs?: number;
 		},

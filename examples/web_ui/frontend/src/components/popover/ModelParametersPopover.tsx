@@ -36,6 +36,7 @@ import { useAvailableTTSModels } from '@/hooks/useAvailableTTSModels';
 import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
 import { credentialLabel } from '@/utils/common';
+import { LONGXIN_AI_LABEL } from '@/api/credential';
 
 interface ParameterProperty {
 	type?: string;
@@ -399,7 +400,7 @@ export function ModelParametersPopover({
 										<DropdownMenuGroup key={type}>
 											{idx > 0 && <DropdownMenuSeparator />}
 											<DropdownMenuLabel>
-												{type.replace(/_credential$/, '')}
+												{LONGXIN_AI_LABEL}
 											</DropdownMenuLabel>
 											{isSingle
 												? renderFallbackItems(
@@ -590,7 +591,7 @@ export function ModelParametersPopover({
 										<DropdownMenuGroup key={type}>
 											{idx > 0 && <DropdownMenuSeparator />}
 											<DropdownMenuLabel>
-												{type.replace(/_credential$/, '')}
+												{LONGXIN_AI_LABEL}
 											</DropdownMenuLabel>
 											{isSingle
 												? renderTTSItems(

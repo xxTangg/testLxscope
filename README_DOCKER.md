@@ -34,12 +34,11 @@ Windows PowerShell：
 Copy-Item .env.example .env
 ```
 
-编辑 `.env`，至少修改登录密码、JWT 密钥和下载密钥。模型 API Key 可以在网页的「凭证」页面添加；如果只使用内网 NewAPI，将 `SILICONFLOW_API_KEY` 留空：
+编辑 `.env`，至少修改登录密码、JWT 密钥和下载密钥。启动后在网页的「凭证」页面配置 `longxin_AI`。
 
 ```env
 # 浏览器访问端口
 WEB_UI_PORT=8000
-AGENTSCOPE_API_PORT=8001
 
 # 初始管理员账号
 AGENTSCOPE_USERNAME=admin
@@ -55,13 +54,6 @@ AGENTSCOPE_JWT_EXPIRE_MINUTES=1440
 # 文件下载签名密钥
 AGENTSCOPE_DOWNLOAD_SECRET=请替换为随机长字符串
 
-# 模型配置
-SILICONFLOW_API_KEY=
-SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
-SILICONFLOW_CHAT_MODEL=deepseek-ai/DeepSeek-V3.2
-SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
-SILICONFLOW_EMBEDDING_DIMENSIONS=1024
-
 # 可选：Redis 密码
 REDIS_PASSWORD=
 ```
@@ -74,7 +66,7 @@ openssl rand -hex 32
 
 请勿将包含真实密码和密钥的 `.env` 提交到 Git。
 
-启动后，在「凭证」页面选择 **NewAPI / OpenAI-compatible**，填写 NewAPI Token、服务端可访问的 API Base URL（例如 `http://newapi.internal:3000/v1`）和模型 ID。多个模型 ID 可用换行或逗号分隔。上下文长度及最大输出长度应按所用模型实际配置；创建后即可在聊天模型列表中选择。内网地址必须能从 `agentscope` 容器访问，浏览器能访问还不够。
+启动后，在「凭证」页面选择 **longxin_AI**，填写 API Key、服务端可访问的 API Base URL（例如 `http://newapi.internal:3000/v1`）和模型 ID。多个模型 ID 可用换行或逗号分隔。按模型设置上下文和最大输出长度。保存后即可在聊天模型列表中选择。内网地址须能从 `agentscope` 容器访问。
 
 ## 3. 构建并启动
 
@@ -89,6 +81,10 @@ docker compose up -d --build
 ```bash
 docker compose ps
 ```
+
+升级已有部署时也执行 `docker compose up -d --build`。Compose 会按新配置重建服务，
+移除后端的宿主机端口映射；数据卷会保留。若旧的 `8001` 规则仍在云安全组或防火墙中，
+请一并删除。
 
 正常情况下，以下服务应处于 `Up` 或 `healthy` 状态：
 
@@ -112,13 +108,13 @@ http://127.0.0.1:8000
 
 使用 `.env` 中的 `AGENTSCOPE_USERNAME` 和 `AGENTSCOPE_PASSWORD` 登录，也可以在登录页注册新账号。每个注册账号会获得独立的用户 ID 和数据空间。
 
-Web UI 会从浏览器直接访问后端 API，默认地址为：
+Web UI 通过同源 `/api/` 路径访问后端。Nginx 在 Docker Compose 内部将请求转发给
+`agentscope:8000`，用户不需要访问或开放后端端口。服务器防火墙或安全组只需允许
+`WEB_UI_PORT`（默认 `8000`）。
 
 ```text
-http://服务器IP:8001
+http://服务器IP:8000/api/
 ```
-
-服务器防火墙或安全组需要同时允许 `WEB_UI_PORT` 和 `AGENTSCOPE_API_PORT`。如果修改 `AGENTSCOPE_API_PORT`，必须使用 `docker compose up -d --build` 重新构建前端镜像。
 
 ## 5. 检查与排错
 
@@ -140,10 +136,10 @@ docker compose logs -f --tail=200
 docker compose logs -f --tail=200 agentscope
 ```
 
-检查认证服务：
+经 Web UI Nginx 代理检查认证服务：
 
 ```bash
-curl -i http://127.0.0.1:8001/auth/health
+curl -i http://127.0.0.1:8000/api/auth/health
 ```
 
 正常响应状态为 `204 No Content`。

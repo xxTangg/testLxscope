@@ -20,6 +20,7 @@ from ..deps import (
 )
 from ..hub import (
     HubBase,
+    BuiltinSkillHub,
     MCPCard,
     MCPHubBase,
     MCPHubPage,
@@ -261,20 +262,28 @@ async def install_skill(
             detail=f"Hub {hub_id!r} has no skill {card_id!r}.",
         ) from e
 
-    record = SkillRecord(
-        user_id=user_id,
-        name=name or card.name,
-        display_name=card.display_name,
-        description=card.description,
-        tags=card.tags,
-        author=card.author,
-        icon_url=card.icon_url,
-        url=card.url,
-        markdown=card.markdown or "",
-        hub_id=card.hub_id,
-        card_id=card.id,
-        version=card.version,
-    )
+    if isinstance(hub, BuiltinSkillHub):
+        if name is not None and name != card.name:
+            raise HTTPException(
+                status_code=400,
+                detail="Built-in skill names cannot be changed.",
+            )
+        record = hub.record(user_id, card_id)
+    else:
+        record = SkillRecord(
+            user_id=user_id,
+            name=name or card.name,
+            display_name=card.display_name,
+            description=card.description,
+            tags=card.tags,
+            author=card.author,
+            icon_url=card.icon_url,
+            url=card.url,
+            markdown=card.markdown or "",
+            hub_id=card.hub_id,
+            card_id=card.id,
+            version=card.version,
+        )
     try:
         await storage.upsert_skill(user_id, record)
     except ValueError as e:

@@ -4,8 +4,8 @@ import type { ReactNode } from 'react';
 
 import type { SkillView } from '@/api';
 import type { UploadOptions } from '@/api/workspace';
+import { SkillSummaryCard } from '@/components/skill/SkillSummaryCard';
 import { Alert, AlertDescription } from '@/components/ui/alert.tsx';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.tsx';
 import { Button } from '@/components/ui/button.tsx';
 import { Checkbox } from '@/components/ui/checkbox.tsx';
 import {
@@ -160,49 +160,28 @@ export function AddSkillDialog({ children, present, onUpload, onAddFromLibrary }
 									</EmptyHeader>
 								</Empty>
 							) : (
-								<ItemGroup className="gap-1">
+								<ItemGroup className="gap-2">
 									{skills.map((skill) => {
 										const already = present.has(skill.name);
 										return (
-											<Item
+											<SkillSummaryCard
 												key={skill.id}
-												data-disabled={already || undefined}
-											>
-												<Checkbox
-													checked={already || picked.has(skill.id)}
-													disabled={already}
-													onCheckedChange={() => toggle(skill)}
-												/>
-												<ItemMedia>
-													<Avatar className="rounded-md">
-														<AvatarImage
-															src={skill.icon_url ?? undefined}
-															alt={skill.display_name || skill.name}
-															loading="lazy"
-														/>
-														<AvatarFallback className="rounded-md">
-															{(skill.display_name || skill.name)
-																.slice(0, 1)
-																.toUpperCase()}
-														</AvatarFallback>
-													</Avatar>
-												</ItemMedia>
-												<ItemContent>
-													<ItemTitle>
-														<span className="font-medium">
-															{skill.display_name || skill.name}
-														</span>
-														{skill.author && (
-															<span className="text-xs text-muted-foreground">
-																@{skill.author}
-															</span>
-														)}
-													</ItemTitle>
-													<ItemDescription className="line-clamp-1">
-														{skill.description}
-													</ItemDescription>
-												</ItemContent>
-											</Item>
+												title={skill.display_name || skill.name}
+												description={skill.description}
+												author={skill.author}
+												iconUrl={skill.icon_url}
+												muted={already}
+												leading={
+													<Checkbox
+														aria-label={
+															skill.display_name || skill.name
+														}
+														checked={already || picked.has(skill.id)}
+														disabled={already}
+														onCheckedChange={() => toggle(skill)}
+													/>
+												}
+											/>
 										);
 									})}
 								</ItemGroup>

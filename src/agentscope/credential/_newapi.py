@@ -17,9 +17,9 @@ class NewAPICredential(CredentialBase):
     model_config = ConfigDict(title="NewAPI / OpenAI-compatible")
 
     type: Literal["newapi_credential"] = "newapi_credential"
-    api_key: SecretStr = Field(description="The NewAPI access token.")
+    api_key: SecretStr = Field(description="The gateway API key.")
     base_url: str = Field(
-        description="NewAPI API base URL, for example http://newapi.internal:3000/v1.",
+        description="Gateway API base URL, for example https://gateway.example.com/v1.",
     )
     models: str = Field(
         description="Model IDs enabled for this key, one per line or separated by commas.",

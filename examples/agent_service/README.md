@@ -13,7 +13,7 @@ Details about the agent service please refer to the [tutorial](https://docs.agen
 
 - Python ≥ 3.11
 - Node.js ≥ 20 with `npx`
-- An OpenAI-compatible chat API key, either provisioned through SiliconFlow in `.env` or added in the Web UI as a NewAPI credential
+- An OpenAI-compatible chat API key configured as a `longxin_AI` credential in the Web UI
 
 ## Quickstart
 

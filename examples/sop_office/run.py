@@ -153,7 +153,7 @@ def export_record(root, scenario, run):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", default="http://127.0.0.1:8001")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8000/api")
     parser.add_argument("--username", default="test")
     parser.add_argument("--credential-id")
     parser.add_argument("--model", default="deepseek-v4-flash")

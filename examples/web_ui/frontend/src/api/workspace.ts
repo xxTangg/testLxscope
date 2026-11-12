@@ -1,4 +1,4 @@
-import { ApiError, client, getAccessToken, getBaseUrl } from './client';
+import { ApiError, buildApiUrl, client, getAccessToken } from './client';
 import type { UploadProgress } from './knowledgeBase';
 import type {
 	AddFromLibraryResponse,
@@ -29,13 +29,14 @@ async function workspaceFileUrl(
 	sessionId: string,
 	path: string,
 	download: boolean,
+	preview = false,
 ) {
 	const { token } = await client.post<WorkspaceDownloadTokenResponse>(
 		'/workspace/files/download-token',
 		undefined,
-		{ agent_id: agentId, session_id: sessionId, path },
+		{ agent_id: agentId, session_id: sessionId, path, preview: String(preview) },
 	);
-	const url = new URL('/workspace/files', getBaseUrl());
+	const url = buildApiUrl('/workspace/files');
 	url.searchParams.set('agent_id', agentId);
 	url.searchParams.set('session_id', sessionId);
 	url.searchParams.set('path', path);
@@ -78,7 +79,7 @@ function uploadSkillXhr(
 		}
 
 		const xhr = new XMLHttpRequest();
-		const url = new URL('/workspace/skill/upload', getBaseUrl());
+		const url = buildApiUrl('/workspace/skill/upload');
 		url.searchParams.set('agent_id', agentId);
 		url.searchParams.set('session_id', sessionId);
 		xhr.open('POST', url.toString(), true);
@@ -164,7 +165,21 @@ export const workspaceApi = {
 			workspaceFileUrl(agentId, sessionId, path, true),
 		/** Mint a path-bound token and build an inline browser preview URL. */
 		previewUrl: (agentId: string, sessionId: string, path: string) =>
-			workspaceFileUrl(agentId, sessionId, path, false),
+			workspaceFileUrl(agentId, sessionId, path, false, true),
+		/** Extract a bounded text preview with the configured document parsers. */
+		previewText: (agentId: string, sessionId: string, path: string) =>
+			client.get<{ text: string; truncated: boolean; mode: 'document' | 'text' | 'hex' }>(
+				'/workspace/files/preview-text',
+				{ agent_id: agentId, session_id: sessionId, path },
+				{ silent: true },
+			),
+		/** Convert an Office file to a PDF stream for inline preview. */
+		previewOfficePdf: (agentId: string, sessionId: string, path: string) =>
+			client.stream('/workspace/files/preview-pdf', {
+				params: { agent_id: agentId, session_id: sessionId, path },
+				silent: true,
+				timeoutMs: 60_000,
+			}),
 	},
 
 	mcp: {

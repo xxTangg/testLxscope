@@ -1,0 +1,7 @@
+{
+  "name": "zh-tech-writing",
+  "repository": "https://github.com/leter/zh-tech-writing",
+  "ref": "ffda9353768dece8aabd26ccb3a4978025e9437c",
+  "path": "skills/zh-tech-writing",
+  "adaptation": "2026-10-21: Chinese discovery metadata, local-only inputs and outputs, host-neutral paths; original license retained."
+}

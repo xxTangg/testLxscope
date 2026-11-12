@@ -8,10 +8,24 @@ import type {
 	UpdateCredentialRequest,
 } from './types';
 
-export const credentialApi = {
-	list: () => client.get<CredentialListResponse>('/credential/'),
+const LONGXIN_AI_CREDENTIAL_TYPE = 'newapi_credential';
+export const LONGXIN_AI_LABEL = 'longxin_AI';
 
-	schemas: () => client.get<CredentialSchemasResponse>('/credential/schemas'),
+export const credentialApi = {
+	list: async (): Promise<CredentialListResponse> => {
+		const { credentials } = await client.get<CredentialListResponse>('/credential/');
+		const visible = credentials.filter((record) => record.data.type === LONGXIN_AI_CREDENTIAL_TYPE);
+		return { credentials: visible, total: visible.length };
+	},
+
+	schemas: async (): Promise<CredentialSchemasResponse> => {
+		const { schemas } = await client.get<CredentialSchemasResponse>('/credential/schemas');
+		return {
+			schemas: schemas
+				.filter((schema) => schema.properties.type?.const === LONGXIN_AI_CREDENTIAL_TYPE)
+				.map((schema) => ({ ...schema, title: LONGXIN_AI_LABEL })),
+		};
+	},
 
 	create: (body: CreateCredentialRequest) =>
 		client.post<CreateCredentialResponse>('/credential/', body),

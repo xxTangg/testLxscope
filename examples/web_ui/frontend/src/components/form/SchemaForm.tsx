@@ -1,3 +1,4 @@
+import { CircleHelp } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import type { JSONSchema, JSONSchemaProperty } from '@/api';
@@ -18,6 +19,8 @@ import {
 	SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { useTranslation } from '@/i18n/useI18n';
 
 const DEFAULT_SKIP_FIELDS = new Set(['id', 'type']);
 
@@ -35,6 +38,8 @@ interface Props {
 	placeholderFor?: (key: string, prop: JSONSchemaProperty) => string | undefined;
 	/** Optional override for the helper text shown under a field. */
 	descriptionFor?: (key: string, prop: JSONSchemaProperty) => string | undefined;
+	/** Optional help shown beside the label on hover or keyboard focus. */
+	helpFor?: (key: string, prop: JSONSchemaProperty) => string | undefined;
 	/** Prefix for generated DOM IDs (so multiple SchemaForms on one page don't collide). */
 	idPrefix?: string;
 	/** Layout of non-boolean fields. `horizontal` puts the label left of the control. */
@@ -88,10 +93,12 @@ export function SchemaForm({
 	labelFor,
 	placeholderFor,
 	descriptionFor,
+	helpFor,
 	idPrefix = 'schema-form',
 	orientation = 'vertical',
 	className,
 }: Props) {
+	const { t } = useTranslation();
 	const entries = Object.entries(schema.properties ?? {}).filter(
 		([key, prop]) => !skipFields.has(key) && prop.const === undefined,
 	);
@@ -111,13 +118,33 @@ export function SchemaForm({
 				const label = labelFor?.(key, prop) ?? prop.title ?? key.replace(/_/g, ' ');
 				const placeholder = placeholderFor?.(key, prop) ?? prop.description;
 				const description = descriptionFor?.(key, prop);
+				const help = helpFor?.(key, prop);
 				const current = values[key];
 
-				const labelNode = (
-					<FieldLabel htmlFor={fieldId}>
+				const fieldLabel = (
+					<FieldLabel htmlFor={fieldId} className={isBoolean ? 'font-normal' : undefined}>
 						{label}
-						{isRequired && <span className="text-destructive ml-0.5">*</span>}
+						{!isBoolean && isRequired && <span className="text-destructive ml-0.5">*</span>}
 					</FieldLabel>
+				);
+				const labelNode = help ? (
+					<div className="flex items-center gap-1.5">
+						{fieldLabel}
+						<Tooltip>
+							<TooltipTrigger
+								type="button"
+								aria-label={t('common.fieldHelp', { field: label })}
+								className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+							>
+								<CircleHelp className="size-3.5" aria-hidden="true" />
+							</TooltipTrigger>
+							<TooltipContent sideOffset={6} className="z-[60] leading-relaxed break-words">
+								{help}
+							</TooltipContent>
+						</Tooltip>
+					</div>
+				) : (
+					fieldLabel
 				);
 				const descriptionNode = description ? (
 					<FieldDescription>{description}</FieldDescription>
@@ -141,11 +168,6 @@ export function SchemaForm({
 					);
 
 				if (isBoolean) {
-					const boxLabel = (
-						<FieldLabel htmlFor={fieldId} className="font-normal">
-							{label}
-						</FieldLabel>
-					);
 					return (
 						<Field key={key} orientation="horizontal">
 							<Checkbox
@@ -159,11 +181,11 @@ export function SchemaForm({
 							    single centred row it has always had. */}
 							{descriptionNode ? (
 								<FieldContent>
-									{boxLabel}
+									{labelNode}
 									{descriptionNode}
 								</FieldContent>
 							) : (
-								boxLabel
+								labelNode
 							)}
 						</Field>
 					);

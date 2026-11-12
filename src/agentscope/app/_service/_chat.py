@@ -14,6 +14,9 @@ that wants them subscribes through the
 import asyncio
 import inspect
 import json
+import mimetypes
+import os
+import re
 from dataclasses import dataclass
 from typing import Literal, TYPE_CHECKING
 
@@ -81,8 +84,9 @@ from ...event import (
 )
 from ._errors import _classify_error, _classify_setup_error
 from ..._utils._common import _generate_id
-from ...message import AssistantMsg, HintBlock, Msg, UserMsg
+from ...message import AssistantMsg, HintBlock, Msg, TextBlock, UserMsg
 from ...permission import AdditionalWorkingDirectory
+from ...workspace import WorkspaceBase
 
 if TYPE_CHECKING:
     from ..channel import ChannelClients
@@ -268,6 +272,139 @@ class ChatService:
             SubagentHitlProjector(storage),
             *(extra_projectors or []),
         ]
+
+    async def _attach_workspace_artifacts(
+        self,
+        *,
+        session_id: str,
+        workspace: WorkspaceBase,
+        reply: Msg,
+    ) -> str | None:
+        """Attach generated workspace files referenced by a reply.
+
+        The assistant already reports output paths for generated files.
+        Resolve those paths server-side, verify that each file belongs to
+        this session's workspace, then persist display metadata on the
+        reply. The browser receives attachment cards instead of having to
+        interpret or expose the workspace path in the message text.
+        """
+        if reply.role != "assistant" or not reply.finished_at:
+            return None
+        reply.metadata["generated_files"] = []
+
+        backend = workspace.get_backend()
+        workdir = backend.abspath(
+            workspace.workdir,
+            cwd=workspace.workdir,
+        )
+        root = workdir.replace("\\", "/").rstrip("/")
+        root_for_compare = root.casefold() if os.name == "nt" else root
+        root_variants = sorted(
+            {
+                workdir.rstrip("/\\"),
+                workdir.replace("\\", "/").rstrip("/\\"),
+                workdir.replace("/", "\\").rstrip("/\\"),
+            },
+            key=len,
+            reverse=True,
+        )
+        escaped_root = "(?:" + "|".join(
+            re.escape(value) for value in root_variants
+        ) + ")"
+        # Match any filename extension while stopping before sentence
+        # punctuation. Paths may be wrapped in file://, Markdown, or code.
+        path_pattern = re.compile(
+            rf"(?<![\w/\\])(?:file://)?(?P<path>{escaped_root}"
+            rf"[/\\][^\r\n`\"'<>]*?\.[\w+-]+(?:\.[\w+-]+)*)"
+            rf"(?=$|[\s`\"'<>),;.!?，。；：])",
+            re.IGNORECASE,
+        )
+        absolute_path_pattern = re.compile(
+            rf"(?<![\w/\\])(?:file://)?(?P<path>{escaped_root}"
+            rf"[/\\][^\r\n`\"'<>]*?)"
+            rf"(?=$|[\s`\"'<>),;.!?，。；：])",
+            re.IGNORECASE,
+        )
+        relative_path_pattern = re.compile(
+            r"(?<![\w/\\])(?P<path>(?:\.{1,2}[/\\])?"
+            r"(?:[\w .()@+-]+[/\\])+[\w .()@+-]+"
+            r"\.[\w+-]+(?:\.[\w+-]+)*|[\w@+-]+"
+            r"\.[\w+-]+(?:\.[\w+-]+)*)"
+            r"(?=$|[\s`\"'<>),;.!?，。；：])",
+            re.IGNORECASE,
+        )
+        relative_no_extension_pattern = re.compile(
+            r"(?<![\w/\\])(?P<path>(?:\.{1,2}[/\\])?"
+            r"(?:[\w .()@+-]+[/\\])+[\w .()@+-]+)"
+            r"(?=$|[\s`\"'<>),;.!?，。；：])",
+            re.IGNORECASE,
+        )
+
+        found: dict[str, dict[str, object]] = {}
+        for block in reply.content:
+            if not isinstance(block, TextBlock):
+                continue
+            matches = [
+                *path_pattern.finditer(block.text),
+                *absolute_path_pattern.finditer(block.text),
+                *relative_path_pattern.finditer(block.text),
+                *relative_no_extension_pattern.finditer(block.text),
+            ]
+            for match in matches:
+                raw_path = match.group("path")
+                try:
+                    target = backend.abspath(raw_path, cwd=workspace.workdir)
+                    normalized_target = target.replace("\\", "/")
+                    if os.name == "nt":
+                        normalized_target = normalized_target.casefold()
+                    if not normalized_target.startswith(root_for_compare + "/"):
+                        continue
+                    entry = await backend.stat(target)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.debug(
+                        "Could not resolve generated file %r in session %r: %s",
+                        raw_path,
+                        session_id,
+                        exc,
+                    )
+                    continue
+                if entry is None or entry.is_dir:
+                    continue
+
+                name = backend.basename(target) or "download"
+                found[target] = {
+                    "path": target,
+                    "reported_path": raw_path,
+                    "name": name,
+                    "media_type": mimetypes.guess_type(name)[0]
+                    or "application/octet-stream",
+                    "size_bytes": entry.size_bytes,
+                }
+
+        artifacts = list(found.values())
+        if not artifacts:
+            return None
+
+        reply.metadata["generated_files"] = artifacts
+        event = CustomEvent(
+            name="generated_files",
+            value={"reply_id": reply.id, "files": artifacts},
+        )
+        try:
+            return await publish_session_event(
+                self._message_bus,
+                session_id,
+                event.model_dump(mode="json"),
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            # The attachment metadata is still persisted with the reply;
+            # only the live update is lost and will appear on refresh.
+            logger.warning(
+                "Could not publish generated files for reply %r: %s",
+                reply.id,
+                exc,
+            )
+            return None
 
     async def run(
         self,
@@ -1131,7 +1268,14 @@ class ChatService:
                 # -------------------------------------------------------------
                 # 5. Assemble the Agent.
                 # -------------------------------------------------------------
-                attachment = f"You're within a session (id={session_id})."
+                attachment = (
+                    f"You're within a session (id={session_id}). "
+                    "When generating a file for the user, save it inside "
+                    "this session's workspace and mention its exact "
+                    "workspace path in your final response. The chat UI "
+                    "turns that path into an attachment card, so do not "
+                    "ask the user to retrieve the file from the server."
+                )
 
                 # Channel-bound sessions: tell the agent which chat it serves.
                 if channel is not None and channel_origin is not None:
@@ -1393,6 +1537,15 @@ class ChatService:
                                     current = asyncio.current_task()
                                     if current is not None:
                                         current.cancel()
+
+                        if reply_msg is not None:
+                            artifact_cursor = await self._attach_workspace_artifacts(
+                                session_id=session_id,
+                                workspace=workspace,
+                                reply=reply_msg,
+                            )
+                            if artifact_cursor is not None:
+                                checkpoint_cursor = artifact_cursor
 
                     except Exception as e:  # pylint: disable=broad-except
                         # CancelledError is a BaseException, so interrupts are

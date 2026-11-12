@@ -6,17 +6,9 @@ import type { UploadOptions } from '@/api/workspace';
 import { AddSkillDialog } from '@/components/dialog/AddSkillDialog.tsx';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog.tsx';
 import { PanelEmpty } from '@/components/panel/PanelEmpty';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.tsx';
+import { SkillSummaryCard } from '@/components/skill/SkillSummaryCard';
 import { Button } from '@/components/ui/button';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
-import {
-	Item,
-	ItemActions,
-	ItemContent,
-	ItemDescription,
-	ItemMedia,
-	ItemTitle,
-} from '@/components/ui/item';
 import { useSkills } from '@/hooks/useSkills.ts';
 import { useTranslation } from '@/i18n/useI18n.ts';
 
@@ -115,50 +107,27 @@ export function SkillPanel({
 					{filtered.map((skill) => {
 						const installed = byName.get(skill.name);
 						return (
-							<Item key={skill.name} variant="outline" className="group/skill">
-								<ItemMedia>
-									<Avatar className="rounded-md">
-										<AvatarImage
-											src={installed?.icon_url ?? undefined}
-											alt={skill.name}
-											loading="lazy"
-										/>
-										<AvatarFallback className="rounded-md">
-											{skill.name.slice(0, 1).toUpperCase()}
-										</AvatarFallback>
-									</Avatar>
-								</ItemMedia>
-								<ItemContent>
-									<ItemTitle>
-										<span className="truncate font-medium">{skill.name}</span>
-										{installed?.author && (
-											<span className="text-xs text-muted-foreground">
-												@{installed.author}
-											</span>
-										)}
-									</ItemTitle>
-									<ItemDescription className="line-clamp-2">
-										{skill.description}
-									</ItemDescription>
-								</ItemContent>
-								<ItemActions>
-									{/* Only on hover: deleting is rare, and a
-									    button on every row competes with the
-									    content for attention. */}
+							<SkillSummaryCard
+								key={skill.name}
+								title={skill.name}
+								description={skill.description}
+								author={installed?.author}
+								iconUrl={installed?.icon_url}
+								actions={
 									<Button
 										variant="secondary"
 										size="icon-sm"
-										className="opacity-0 transition-opacity group-hover/skill:opacity-100 focus-visible:opacity-100"
 										onClick={() => {
 											setDeleteTarget(skill.name);
 											setDeleteOpen(true);
 										}}
 										title={t('common.delete')}
+										aria-label={`${t('common.delete')} ${skill.name}`}
 									>
 										<Trash className="size-3" />
 									</Button>
-								</ItemActions>
-							</Item>
+								}
+							/>
 						);
 					})}
 				</div>

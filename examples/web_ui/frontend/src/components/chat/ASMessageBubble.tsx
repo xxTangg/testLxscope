@@ -23,7 +23,6 @@ import {
 	Loader2,
 	TriangleAlert,
 } from 'lucide-react';
-import * as mime from 'mime-types';
 import { memo, useEffect, useRef, useState } from 'react';
 
 import { renderToolCall } from './tool-renderers';
@@ -61,6 +60,7 @@ import { Message, MessageFooter, MessageContent } from '@/components/ui/message'
 import { useAudioBlock, useReplayController } from '@/context/AudioContext';
 import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
+import { extensionForMediaType } from '@/utils/mediaType';
 import { copyToClipboard, formatNumber, formatTime } from '@/utils/common';
 import 'streamdown/styles.css';
 
@@ -417,55 +417,258 @@ interface WorkspaceDownloadContext {
 	sessionId: string;
 }
 
-// Generated artifacts are commonly reported as plain container paths instead
-// of DataBlocks. Restrict recognition to the service workspace tree and known
-// file extensions so ordinary prose containing slashes remains untouched.
-const WORKSPACE_FILE_PATH =
-	/(?:file:\/\/)?(\/app\/examples\/agent_service\/workspaces\/[^\r\n`"'<>]*?\.(?:tar\.gz|pdf|docx?|xlsx?|pptx?|csv|tsv|txt|md|json|ya?ml|xml|zip|html?|png|jpe?g|gif|webp|svg|mp3|wav|m4a|mp4|mov|avi))/giu;
+interface WorkspaceArtifact {
+	path: string;
+	reported_path?: string;
+	name: string;
+	media_type: string;
+	size_bytes: number | null;
+}
 
-function workspaceFilePaths(text: string): string[] {
+const WORKSPACE_FILE_MEDIA_TYPES: Record<string, string> = {
+	avi: 'video/x-msvideo',
+	csv: 'text/csv',
+	doc: 'application/msword',
+	docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+	gif: 'image/gif',
+	heic: 'image/heic',
+	html: 'text/html',
+	htm: 'text/html',
+	jpeg: 'image/jpeg',
+	jpg: 'image/jpeg',
+	json: 'application/json',
+	md: 'text/markdown',
+	m4a: 'audio/mp4',
+	mp3: 'audio/mpeg',
+	mp4: 'video/mp4',
+	mov: 'video/quicktime',
+	pdf: 'application/pdf',
+	png: 'image/png',
+	ppt: 'application/vnd.ms-powerpoint',
+	pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+	svg: 'image/svg+xml',
+	tif: 'image/tiff',
+	tiff: 'image/tiff',
+	tsv: 'text/tab-separated-values',
+	txt: 'text/plain',
+	wav: 'audio/wav',
+	webm: 'video/webm',
+	webp: 'image/webp',
+	xls: 'application/vnd.ms-excel',
+	xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+	xml: 'application/xml',
+	yaml: 'application/yaml',
+	yml: 'application/yaml',
+	zip: 'application/zip',
+};
+
+function workspaceMediaType(filename: string): string {
+	const extension = filename.split('.').pop()?.toLowerCase() ?? '';
+	return WORKSPACE_FILE_MEDIA_TYPES[extension] ?? 'application/octet-stream';
+}
+
+function workspaceArtifacts(message: Msg): WorkspaceArtifact[] {
+	const metadata = (message as unknown as { metadata?: unknown }).metadata;
+	const value =
+		metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+			? (metadata as Record<string, unknown>).generated_files
+			: undefined;
+	if (Array.isArray(value)) {
+		return value.flatMap((candidate): WorkspaceArtifact[] => {
+			if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
+			const file = candidate as Record<string, unknown>;
+			if (
+				typeof file.path !== 'string' ||
+				typeof file.name !== 'string' ||
+				typeof file.media_type !== 'string'
+			) {
+				return [];
+			}
+			return [{
+				path: file.path,
+				name: file.name,
+				media_type: file.media_type,
+				size_bytes: typeof file.size_bytes === 'number' ? file.size_bytes : null,
+				reported_path:
+					typeof file.reported_path === 'string' ? file.reported_path : undefined,
+			}];
+		});
+	}
+
+	// Existing conversation history predates structured file metadata. Keep
+	// rendering its workspace paths as attachment cards during the transition.
+	const pathPattern =
+		/(?:file:\/\/)?(\/app\/examples\/agent_service\/workspaces\/[^\r\n`"'<>]*?\.[\p{L}\p{N}_+-]+(?:\.[\p{L}\p{N}_+-]+)*)(?=$|[\s`"'<>),;.!?，。；：])/gimu;
 	const paths = new Set<string>();
-	for (const match of text.matchAll(WORKSPACE_FILE_PATH)) paths.add(match[1]);
-	return [...paths];
+	for (const block of message.content) {
+		if (block.type !== 'text') continue;
+		for (const match of block.text.matchAll(pathPattern)) paths.add(match[1]);
+	}
+	return [...paths].map((path) => {
+		const name = path.split(/[\\/]/).pop() || path;
+		return {
+			path,
+			name,
+			media_type: workspaceMediaType(name),
+			size_bytes: null,
+		};
+	});
 }
 
-function isHtmlWorkspaceFile(path: string): boolean {
-	return /\.(?:html|htm)$/iu.test(path);
+function hideWorkspacePaths(text: string, files: WorkspaceArtifact[]): string {
+	return files.reduce(
+		(result, file) => {
+			const paths = [file.path, file.reported_path].filter(
+				(path): path is string => !!path,
+			);
+			return paths.reduce(
+				(value, path) =>
+					value
+						.split(`file://${path}`)
+						.join(file.name)
+						.split(path)
+						.join(file.name),
+				result,
+			);
+		},
+		text,
+	);
 }
 
-function HtmlPreviewDialog({
-	path,
+function fileExtension(file: WorkspaceArtifact): string {
+	return file.name.split('.').pop()?.toLowerCase() ?? '';
+}
+
+type WorkspacePreviewKind =
+	| 'html'
+	| 'text'
+	| 'document'
+	| 'pdf'
+	| 'image'
+	| 'audio'
+	| 'video'
+	| 'raw';
+
+function workspacePreviewKind(file: WorkspaceArtifact): WorkspacePreviewKind {
+	const mediaType = file.media_type.toLowerCase().split(';')[0];
+	const extension = fileExtension(file);
+	if (mediaType === 'text/html' || ['html', 'htm'].includes(extension)) return 'html';
+	if (mediaType === 'application/pdf' || extension === 'pdf') return 'pdf';
+	if (mediaType.startsWith('image/')) return 'image';
+	if (mediaType.startsWith('audio/')) return 'audio';
+	if (mediaType.startsWith('video/')) return 'video';
+	if (['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(extension)) {
+		return 'document';
+	}
+	if (
+		mediaType.startsWith('text/') ||
+		['json', 'jsonl', 'yaml', 'yml', 'xml', 'csv', 'tsv'].includes(extension)
+	) {
+		return 'text';
+	}
+	return 'raw';
+}
+
+function formatFileSize(size: number | null): string | null {
+	if (size === null || !Number.isFinite(size) || size < 0) return null;
+	if (size < 1024) return `${size} B`;
+	const units = ['KB', 'MB', 'GB', 'TB'];
+	let value = size / 1024;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit += 1;
+	}
+	return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
+function WorkspacePreviewDialog({
+	file,
 	context,
 	open,
 	onOpenChange,
+	onDownload,
 }: {
-	path: string | null;
+	file: WorkspaceArtifact | null;
 	context: WorkspaceDownloadContext;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
+	onDownload: (file: WorkspaceArtifact) => void;
 }) {
 	const { t } = useTranslation();
 	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+	const [text, setText] = useState<string | null>(null);
+	const [previewMode, setPreviewMode] = useState<'document' | 'text' | 'hex' | null>(null);
+	const [previewTruncated, setPreviewTruncated] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const kind = file ? workspacePreviewKind(file) : 'raw';
+	const textTooLarge = kind === 'text' && (file?.size_bytes ?? 0) > 2 * 1024 * 1024;
+	const parsedPreviewTooLarge =
+		(kind === 'document' || kind === 'raw') && (file?.size_bytes ?? 0) > 10 * 1024 * 1024;
 
 	useEffect(() => {
-		if (!open || !path) {
+		if (!open || !file) {
 			setPreviewUrl(null);
+			setText(null);
+			setPreviewMode(null);
+			setPreviewTruncated(false);
 			setLoading(false);
 			setError(null);
 			return;
 		}
 
 		let cancelled = false;
+		let objectPreviewUrl: string | null = null;
 		setPreviewUrl(null);
+		setText(null);
+		setPreviewMode(null);
+		setPreviewTruncated(false);
 		setError(null);
+		setLoading(false);
+		if (textTooLarge || parsedPreviewTooLarge) return;
 		setLoading(true);
-		workspaceApi.files
-			.previewUrl(context.agentId, context.sessionId, path)
-			.then((url) => {
-				if (!cancelled) setPreviewUrl(url);
-			})
+		const load = async () => {
+			if (kind === 'document') {
+				const response = await workspaceApi.files.previewOfficePdf(
+					context.agentId,
+					context.sessionId,
+					file.path,
+				);
+				const objectUrl = URL.createObjectURL(await response.blob());
+				if (!cancelled) {
+					objectPreviewUrl = objectUrl;
+					setPreviewUrl(objectUrl);
+				} else {
+					URL.revokeObjectURL(objectUrl);
+				}
+				return;
+			}
+
+			if (kind === 'raw' || kind === 'text') {
+				const result = await workspaceApi.files.previewText(
+					context.agentId,
+					context.sessionId,
+					file.path,
+				);
+				if (!cancelled) {
+					setText(result.text);
+					setPreviewMode(result.mode);
+					setPreviewTruncated(result.truncated);
+				}
+				return;
+			}
+
+			const url = await workspaceApi.files.previewUrl(
+				context.agentId,
+				context.sessionId,
+				file.path,
+			);
+			if (!cancelled) {
+				setPreviewUrl(url);
+			}
+		};
+		load()
 			.catch((err) => {
 				if (!cancelled) setError((err as Error).message || String(err));
 			})
@@ -475,19 +678,20 @@ function HtmlPreviewDialog({
 
 		return () => {
 			cancelled = true;
+			if (objectPreviewUrl) URL.revokeObjectURL(objectPreviewUrl);
 		};
-	}, [open, path, context.agentId, context.sessionId]);
+	}, [open, file, kind, textTooLarge, parsedPreviewTooLarge, context.agentId, context.sessionId]);
 
-	const filename = path?.split('/').pop() || t('messageBubble.previewHtmlTitle');
+	const filename = file?.name ?? t('messageBubble.previewFile');
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="flex h-[85vh] w-[95vw] !max-w-[1200px] flex-col gap-3">
 				<DialogHeader>
 					<DialogTitle className="truncate pr-8">{filename}</DialogTitle>
-					<DialogDescription>{t('messageBubble.previewHtmlDescription')}</DialogDescription>
+					<DialogDescription>{t('messageBubble.previewDescription')}</DialogDescription>
 				</DialogHeader>
-				<div className="min-h-0 flex-1 overflow-hidden rounded-md border bg-white">
+				<div className="min-h-0 flex-1 overflow-auto rounded-md border bg-background">
 					{loading && (
 						<div className="text-muted-foreground flex h-full items-center justify-center gap-2 text-sm">
 							<Loader2 className="size-4 animate-spin" />
@@ -499,16 +703,82 @@ function HtmlPreviewDialog({
 							{t('messageBubble.previewFailed')}: {error}
 						</div>
 					)}
-					{previewUrl && !error && (
+					{textTooLarge && (
+						<div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-sm">
+							{t('messageBubble.previewTooLarge')}
+							<Button variant="outline" onClick={() => file && onDownload(file)}>
+								<Download className="size-4" />
+								{t('messageBubble.downloadFile')}
+							</Button>
+						</div>
+					)}
+					{parsedPreviewTooLarge && (
+						<div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-sm">
+							{t('messageBubble.previewTooLarge')}
+							<Button variant="outline" onClick={() => file && onDownload(file)}>
+								<Download className="size-4" />
+								{t('messageBubble.downloadFile')}
+							</Button>
+						</div>
+					)}
+					{kind === 'text' && text !== null && !error && (
+						<div className="p-4">
+							{fileExtension(file!) === 'md' || fileExtension(file!) === 'markdown' ? (
+								<Markdown>{text}</Markdown>
+							) : (
+								<pre className="text-sm break-words whitespace-pre-wrap">{text}</pre>
+							)}
+							{previewTruncated && (
+								<p className="text-muted-foreground mt-3 text-xs">
+									{t('messageBubble.previewTruncated')}
+								</p>
+							)}
+						</div>
+					)}
+					{kind === 'raw' && text !== null && !error && (
+						<div className="p-4">
+							{previewMode === 'hex' && (
+								<p className="text-muted-foreground mb-3 text-xs">
+									{t('messageBubble.previewBinary')}
+								</p>
+							)}
+							<pre className="text-sm break-words whitespace-pre-wrap">{text}</pre>
+							{previewTruncated && (
+								<p className="text-muted-foreground mt-3 text-xs">
+									{t('messageBubble.previewTruncated')}
+								</p>
+							)}
+						</div>
+					)}
+					{previewUrl && !error && kind === 'html' && (
 						<iframe
 							src={previewUrl}
 							title={filename}
-							className="h-full w-full border-0"
+							className="h-full w-full border-0 bg-white"
 							referrerPolicy="no-referrer"
-							// Keep generated scripts inside an opaque origin so they cannot
-							// access the parent application or its authenticated storage.
 							sandbox="allow-scripts"
 						/>
+					)}
+					{previewUrl && !error && kind === 'pdf' && (
+						<iframe src={previewUrl} title={filename} className="h-full w-full border-0" />
+					)}
+					{previewUrl && !error && kind === 'document' && (
+						<iframe src={previewUrl} title={filename} className="h-full w-full border-0" />
+					)}
+					{previewUrl && !error && kind === 'image' && (
+						<div className="flex h-full items-center justify-center overflow-auto p-4">
+							<img src={previewUrl} alt={filename} className="max-h-full max-w-full object-contain" />
+						</div>
+					)}
+					{previewUrl && !error && kind === 'audio' && (
+						<div className="flex h-full items-center justify-center p-6">
+							<audio controls src={previewUrl} className="w-full max-w-xl" />
+						</div>
+					)}
+					{previewUrl && !error && kind === 'video' && (
+						<div className="flex h-full items-center justify-center p-4">
+							<video controls src={previewUrl} className="max-h-full max-w-full" />
+						</div>
 					)}
 				</div>
 			</DialogContent>
@@ -516,88 +786,88 @@ function HtmlPreviewDialog({
 	);
 }
 
-function WorkspaceFileDownloads({
-	text,
+function WorkspaceArtifacts({
+	files,
 	context,
 }: {
-	text: string;
+	files: WorkspaceArtifact[];
 	context: WorkspaceDownloadContext;
 }) {
 	const { t } = useTranslation();
 	const [downloading, setDownloading] = useState<string | null>(null);
-	const [previewPath, setPreviewPath] = useState<string | null>(null);
-	const paths = workspaceFilePaths(text);
+	const [previewFile, setPreviewFile] = useState<WorkspaceArtifact | null>(null);
 
-	if (paths.length === 0) return null;
-
-	const download = async (path: string) => {
-		setDownloading(path);
+	const download = async (file: WorkspaceArtifact) => {
+		setDownloading(file.path);
 		try {
 			const url = await workspaceApi.files.downloadUrl(
 				context.agentId,
 				context.sessionId,
-				path,
+				file.path,
 			);
 			const anchor = document.createElement('a');
 			anchor.href = url;
-			anchor.download = path.split('/').pop() || 'download';
+			anchor.download = file.name;
 			document.body.appendChild(anchor);
 			anchor.click();
 			anchor.remove();
+		} catch {
+			// The API client reports the failure to the user.
 		} finally {
 			setDownloading(null);
 		}
 	};
 
+	if (files.length === 0) return null;
+
 	return (
 		<>
 			<AttachmentGroup className="mt-2 max-w-full">
-				{paths.map((path) => {
-				const filename = path.split('/').pop() || path;
-				const busy = downloading === path;
-				return (
-					<Attachment key={path} size="sm" className="max-w-full">
-						<AttachmentMedia variant="icon">
-							<FileText />
-						</AttachmentMedia>
-						<AttachmentContent>
-							<AttachmentTitle title={filename}>{filename}</AttachmentTitle>
-							<AttachmentDescription title={path}>
-								{t('messageBubble.workspaceFile')}
-							</AttachmentDescription>
-						</AttachmentContent>
-						<AttachmentActions>
-							{isHtmlWorkspaceFile(path) && (
+				{files.map((file) => {
+					const busy = downloading === file.path;
+					const size = formatFileSize(file.size_bytes);
+					return (
+						<Attachment key={file.path} size="sm" className="max-w-full">
+							<AttachmentMedia variant="icon">
+								<FileText />
+							</AttachmentMedia>
+							<AttachmentContent>
+								<AttachmentTitle title={file.name}>{file.name}</AttachmentTitle>
+								<AttachmentDescription>
+									{[t('messageBubble.workspaceFile'), size].filter(Boolean).join(' · ')}
+								</AttachmentDescription>
+							</AttachmentContent>
+							<AttachmentActions>
 								<AttachmentAction
 									type="button"
 									title={t('messageBubble.previewFile')}
 									aria-label={t('messageBubble.previewFile')}
-									onClick={() => setPreviewPath(path)}
+									onClick={() => setPreviewFile(file)}
 								>
 									<Eye />
 								</AttachmentAction>
-							)}
-							<AttachmentAction
-								type="button"
-								disabled={downloading !== null}
-								title={t('messageBubble.downloadFile')}
-								aria-label={t('messageBubble.downloadFile')}
-								onClick={() => void download(path)}
-							>
-								{busy ? <Loader2 className="animate-spin" /> : <Download />}
-							</AttachmentAction>
-						</AttachmentActions>
-					</Attachment>
-				);
+								<AttachmentAction
+									type="button"
+									disabled={downloading !== null}
+									title={t('messageBubble.downloadFile')}
+									aria-label={t('messageBubble.downloadFile')}
+									onClick={() => void download(file)}
+								>
+									{busy ? <Loader2 className="animate-spin" /> : <Download />}
+								</AttachmentAction>
+							</AttachmentActions>
+						</Attachment>
+					);
 				})}
 			</AttachmentGroup>
-			<HtmlPreviewDialog
-				path={previewPath}
+			<WorkspacePreviewDialog
+				file={previewFile}
 				context={context}
-				open={previewPath !== null}
+				open={previewFile !== null}
 				onOpenChange={(open) => {
-					if (!open) setPreviewPath(null);
+					if (!open) setPreviewFile(null);
 				}}
+				onDownload={(file) => void download(file)}
 			/>
 		</>
 	);
@@ -624,6 +894,7 @@ function ASMessageBubbleComponent({ message, agentId, sessionId }: MessageBubble
 	const isUser = message.role === 'user';
 	const { t } = useTranslation();
 	const downloadContext = !isUser && agentId && sessionId ? { agentId, sessionId } : undefined;
+	const generatedFiles = downloadContext ? workspaceArtifacts(message) : [];
 
 	const isRunning = !message.finished_at;
 	const hasUsage =
@@ -672,7 +943,7 @@ function ASMessageBubbleComponent({ message, agentId, sessionId }: MessageBubble
 	// the tool calls and attachments around it.
 	const plainText = message.content
 		.filter((b): b is TextBlock => b.type === 'text')
-		.map((b) => b.text)
+		.map((b) => hideWorkspacePaths(b.text, generatedFiles))
 		.join('\n\n');
 
 	const startMs = new Date(message.created_at).getTime();
@@ -702,7 +973,7 @@ function ASMessageBubbleComponent({ message, agentId, sessionId }: MessageBubble
 										<ASBlock
 											block={block}
 											key={index}
-											downloadContext={downloadContext}
+											generatedFiles={generatedFiles}
 										/>
 									))}
 								</CollapsibleContent>
@@ -713,10 +984,16 @@ function ASMessageBubbleComponent({ message, agentId, sessionId }: MessageBubble
 				{primaryBlocks.map((block, index) => (
 					<Bubble key={index} variant={isUser ? 'muted' : 'ghost'}>
 						<BubbleContent>
-							<ASBlock block={block} downloadContext={downloadContext} />
+							<ASBlock
+								block={block}
+								generatedFiles={generatedFiles}
+							/>
 						</BubbleContent>
 					</Bubble>
 				))}
+				{downloadContext && generatedFiles.length > 0 && (
+					<WorkspaceArtifacts files={generatedFiles} context={downloadContext} />
+				)}
 				{message.finished_reason === ReplyFinishedReason.ERROR && (
 					<Alert
 						variant="destructive"
@@ -736,7 +1013,7 @@ function ASMessageBubbleComponent({ message, agentId, sessionId }: MessageBubble
 					{blocks
 						.filter((block) => block.type === 'data')
 						.map((block, index) => (
-							<ASBlock block={block} key={index} downloadContext={downloadContext} />
+							<ASBlock block={block} key={index} />
 						))}
 				</AttachmentGroup>
 				{message.role === 'user' ? (
@@ -845,23 +1122,18 @@ function ThinkingBlockView({ block }: { block: ThinkingBlock }) {
 
 interface ASBlockProps {
 	block: ExtendedContentBlock;
-	downloadContext?: WorkspaceDownloadContext;
+	generatedFiles?: WorkspaceArtifact[];
 }
 
-export function ASBlock({ block, downloadContext, ...props }: ASBlockProps) {
+export function ASBlock({ block, generatedFiles = [], ...props }: ASBlockProps) {
 	const { t } = useTranslation();
 
 	switch (block.type) {
 		case 'text':
 			return (
-				<>
-					<Markdown animated isAnimating={!block.finished_at} {...props}>
-						{block.text}
-					</Markdown>
-					{downloadContext && block.finished_at && (
-						<WorkspaceFileDownloads text={block.text} context={downloadContext} />
-					)}
-				</>
+				<Markdown animated isAnimating={!block.finished_at} {...props}>
+					{hideWorkspacePaths(block.text, generatedFiles)}
+				</Markdown>
 			);
 		case 'data': {
 			const dataType = block.source.media_type.split('/')[0];
@@ -881,7 +1153,7 @@ export function ASBlock({ block, downloadContext, ...props }: ASBlockProps) {
 								<AttachmentTitle>{block.name}</AttachmentTitle>
 								<AttachmentDescription>
 									{(
-										mime.extension(block.source.media_type) || 'bin'
+									extensionForMediaType(block.source.media_type) || 'bin'
 									).toUpperCase()}
 								</AttachmentDescription>
 							</AttachmentContent>
@@ -897,7 +1169,7 @@ export function ASBlock({ block, downloadContext, ...props }: ASBlockProps) {
 								<AttachmentTitle>{block.name}</AttachmentTitle>
 								<AttachmentDescription>
 									{(
-										mime.extension(block.source.media_type) || 'bin'
+									extensionForMediaType(block.source.media_type) || 'bin'
 									).toUpperCase()}
 								</AttachmentDescription>
 							</AttachmentContent>
@@ -914,7 +1186,7 @@ export function ASBlock({ block, downloadContext, ...props }: ASBlockProps) {
 								<AttachmentTitle>{block.name}</AttachmentTitle>
 								<AttachmentDescription>
 									{(
-										mime.extension(block.source.media_type) || 'bin'
+									extensionForMediaType(block.source.media_type) || 'bin'
 									).toUpperCase()}
 								</AttachmentDescription>
 							</AttachmentContent>
@@ -980,7 +1252,11 @@ export function ASBlock({ block, downloadContext, ...props }: ASBlockProps) {
 					</CollapsibleTrigger>
 					<CollapsibleContent className="bg-muted p-2 rounded text-sm">
 						{items.map((item, index) => (
-							<ASBlock block={item} key={index} downloadContext={downloadContext} />
+							<ASBlock
+								block={item}
+								key={index}
+								generatedFiles={generatedFiles}
+							/>
 						))}
 					</CollapsibleContent>
 				</Collapsible>

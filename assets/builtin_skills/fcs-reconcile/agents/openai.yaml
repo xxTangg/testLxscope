@@ -1,0 +1,36 @@
+# Codex（OpenAI）平台专属配置
+#
+# 平台专属配置不得侵入确定性业务核心（NFR-08）：此处仅描述平台如何安装、发现、调用与
+# 授权本 Skill，不包含任何对账逻辑。
+#
+# 支持级别：格式兼容（未逐项实测）。验证项清单见
+# docs/governance/agent-install.md §4；安装方式见 README「安装」。
+# 具体字段名以 Codex 正式 Agent Skills 规范为准，逐项验证后再固化为受平台读取的配置。
+
+name: fcs-reconcile
+
+install:
+  user_scope: ~/.codex/skills/fcs-reconcile/
+  project_scope: .codex/skills/fcs-reconcile/
+  # 装完须新开会话才加载；装错位置的表现是技能不出现且无报错。
+  requires_new_session: true
+
+entrypoint: scripts/reconcile.py    # 调用：python scripts/reconcile.py --config <config.yaml>
+
+runtime:
+  # 解释器必须与安装 requirements.txt 时用的是同一个，否则 ModuleNotFoundError: pandas
+  dependencies: [pandas, openpyxl, pyyaml]
+  network_at_install: required      # 仅装依赖这一步需要网络
+  network_at_run: disabled          # guard.block_network() 在管线第一步执行
+
+permissions:
+  filesystem: read-write-user-selected   # 仅配置中指定的输入/输出路径
+  network: disabled
+  source_write: false                    # 源文件只读，运行前后 SHA-256 比对
+
+data_flow:
+  # 只有 summary 上交模型；原始明细、DataFrame、标准行不越界，终端不打印交易明细
+  to_model: summary_only
+  raw_details_to_model: false
+
+pre_run_confirmation: required            # 展示数据处理声明并等待用户确认，确认前零落盘

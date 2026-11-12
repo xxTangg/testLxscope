@@ -37,8 +37,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    ports:
-      - "${AGENTSCOPE_API_PORT:-8001}:8000"
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -51,11 +49,6 @@ services:
       AGENTSCOPE_AUTH_USERS: ${AGENTSCOPE_AUTH_USERS:-}
       AGENTSCOPE_JWT_SECRET: ${AGENTSCOPE_JWT_SECRET:-change-me-in-production-use-32-bytes}
       AGENTSCOPE_JWT_EXPIRE_MINUTES: ${AGENTSCOPE_JWT_EXPIRE_MINUTES:-1440}
-      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
-      SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
-      SILICONFLOW_CHAT_MODEL: ${SILICONFLOW_CHAT_MODEL:-deepseek-ai/DeepSeek-V3.2}
-      SILICONFLOW_EMBEDDING_MODEL: ${SILICONFLOW_EMBEDDING_MODEL:-BAAI/bge-m3}
-      SILICONFLOW_EMBEDDING_DIMENSIONS: ${SILICONFLOW_EMBEDDING_DIMENSIONS:-1024}
       QDRANT_PATH: ${QDRANT_PATH:-/app/qdrant_data}
       PLAYWRIGHT_MCP_COMMAND: playwright-mcp
       # Keep the MCP child process on the same browser directory used during
@@ -85,8 +78,6 @@ services:
     build:
       context: ./examples/web_ui
       dockerfile: Dockerfile
-      args:
-        VITE_AGENTSCOPE_API_PORT: ${AGENTSCOPE_API_PORT:-8001}
     restart: unless-stopped
     depends_on:
       agentscope:

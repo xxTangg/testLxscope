@@ -1,0 +1,14 @@
+{
+  "name": "official-document-drafting",
+  "repository": "https://github.com/zhaohui-yang/official-document-drafting",
+  "ref": "6b4166a50b96733684b36da6336ea85a847cf3be",
+  "path": ".",
+  "adapted_at": "2026-10-21",
+  "adaptations": [
+    "内网内置版仅使用用户上传或明确授权的内网材料，禁止运行时访问公网、下载远程资源或动态安装依赖。",
+    "业务素材及导出文件仅保存在当前会话工作目录，源规则由 prompts/ 维护并通过生成器重建入口与配套产物。",
+    "公网采集类子技能改为整理用户提供的内网材料，字体下载及用户任务中的字体安装脚本已禁用。",
+    "移除分发授权未确认的方正小标宋简.TTF、仿宋_GB2312.ttf、黑体公文字体.ttf、楷体_GB2312.ttf；保留字体名称和版式映射，Word 导出使用企业已授权预装字体。",
+    "保留上游 LICENSE，并新增标准库冒烟测试验证断网导出与分发包边界。"
+  ]
+}

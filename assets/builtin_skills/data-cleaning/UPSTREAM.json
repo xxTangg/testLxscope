@@ -1,0 +1,7 @@
+{
+  "name": "data-cleaning",
+  "repository": "https://github.com/magnus919/agent-skills",
+  "ref": "92c327e525da69c9ad3812fd223a1770e977c2e3",
+  "path": "data-cleaning",
+  "adaptation": "2026-10-21: Chinese discovery metadata, local-only inputs and outputs, host-neutral paths; original license retained."
+}

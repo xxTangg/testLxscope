@@ -206,6 +206,33 @@ export function useMessages(
 					// The member resolved (or its run ended); clear the card.
 					const v = custom.value as { worker_session_id: string; reply_id: string };
 					setSubagentHitl((prev) => prev.filter((x) => hitlKey(x) !== hitlKey(v)));
+				} else if (custom.name === 'generated_files') {
+					const v = custom.value as {
+						reply_id?: string;
+						files?: Array<{
+							path: string;
+							reported_path?: string;
+							name: string;
+							media_type: string;
+							size_bytes: number | null;
+						}>;
+					};
+					if (v.reply_id && Array.isArray(v.files)) {
+						const reply = msgsRef.current.find((message) => message.id === v.reply_id);
+						if (reply) {
+							const updated = {
+								...reply,
+								metadata: { ...reply.metadata, generated_files: v.files },
+							};
+							msgsRef.current = msgsRef.current.map((message) =>
+								message.id === v.reply_id ? updated : message,
+							);
+							if (currentReplyRef.current?.id === v.reply_id) {
+								currentReplyRef.current = updated;
+							}
+							scheduleUpdate();
+						}
+					}
 				}
 				return;
 			}

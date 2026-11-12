@@ -402,8 +402,10 @@ function MinePanel({ skills, loading, onRemove }: MinePanelProps) {
 									<span className="font-medium">
 										{skill.display_name || skill.name}
 									</span>
-									{/* A hand-added skill has no hub to name. */}
-									{skill.hub_id && (
+									{skill.hub_id === 'builtin' && (
+										<Badge variant="secondary">{t('skill.builtin')}</Badge>
+									)}
+									{skill.hub_id && skill.hub_id !== 'builtin' && (
 										<span className="text-xs text-muted-foreground">
 											@{skill.hub_id}
 										</span>
@@ -437,7 +439,7 @@ function MinePanel({ skills, loading, onRemove }: MinePanelProps) {
 										e.stopPropagation();
 										onRemove(skill.id);
 									}}
-									title={t('common.delete')}
+									title={t('skill.uninstall')}
 								>
 									<Trash2 />
 								</Button>
@@ -462,7 +464,7 @@ function MinePanel({ skills, loading, onRemove }: MinePanelProps) {
 						}}
 					>
 						<Trash2 />
-						{t('common.delete')}
+						{t('skill.uninstall')}
 					</Button>
 				}
 			/>

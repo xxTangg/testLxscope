@@ -1,4 +1,4 @@
-import { ApiError, client, getAccessToken, getBaseUrl } from './client';
+import { ApiError, buildApiUrl, client, getAccessToken } from './client';
 import type {
 	ChatRequest,
 	ListChatAttachmentContentTypesResponse,
@@ -12,7 +12,7 @@ function parseAttachment(file: File): Promise<ParseChatAttachmentResponse> {
 
 	return new Promise((resolve, reject) => {
 		const xhr = new XMLHttpRequest();
-		const url = new URL('/chat/attachments/parse', getBaseUrl());
+		const url = buildApiUrl('/chat/attachments/parse');
 		xhr.open('POST', url.toString(), true);
 		const token = getAccessToken();
 		if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);

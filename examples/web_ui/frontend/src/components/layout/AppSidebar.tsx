@@ -5,7 +5,6 @@ import {
 	Calendars,
 	Compass,
 	KeyRound,
-	Languages,
 	LibraryBig,
 	LogOut,
 	ListChecks,
@@ -39,19 +38,16 @@ import {
 	SidebarMenuItem,
 } from '@/components/ui/sidebar';
 import { useAuth } from '@/hooks/useAuth';
-import i18n from '@/i18n';
 import { useTranslation } from '@/i18n/useI18n';
 
 const iconButtonClassName =
 	'h-auto! min-h-12! flex-col! justify-center! gap-0.5! p-1! text-[10px] leading-3';
+const iconLabelClassName = 'max-w-full text-center text-[9px] leading-3 whitespace-nowrap!';
 
 export function AppSidebar() {
 	const navigate = useNavigate();
 	const location = useLocation();
 	const { t } = useTranslation();
-	const iconLabelClassName = `max-w-full text-center text-[9px] leading-3 ${
-		i18n.language.startsWith('zh') ? 'whitespace-nowrap!' : 'whitespace-normal!'
-	}`;
 	const { startOnborda } = useOnborda();
 	const { user, logout } = useAuth();
 
@@ -64,11 +60,6 @@ export function AppSidebar() {
 		} else {
 			startOnborda(CHAT_TOUR_NAME);
 		}
-	};
-
-	const handleToggleLanguage = () => {
-		const next = i18n.language.startsWith('zh') ? 'en' : 'zh';
-		i18n.changeLanguage(next);
 	};
 
 	const handleLogout = async () => {
@@ -253,21 +244,6 @@ export function AppSidebar() {
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
-					</SidebarMenuItem>
-					<SidebarMenuItem>
-						<SidebarMenuButton
-							tooltip={{
-								children: i18n.language.startsWith('zh')
-									? t('common.switchToEn')
-									: t('common.switchToZh'),
-								hidden: false,
-							}}
-							onClick={handleToggleLanguage}
-							className={iconButtonClassName}
-						>
-							<Languages />
-							<span className={iconLabelClassName}>{t('common.language')}</span>
-						</SidebarMenuButton>
 					</SidebarMenuItem>
 					<SidebarMenuItem>
 						<SidebarMenuButton

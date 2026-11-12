@@ -13,8 +13,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from '@/components/ui/card.tsx';
-import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field.tsx';
-import { Input } from '@/components/ui/input.tsx';
+import { Field, FieldDescription, FieldGroup } from '@/components/ui/field.tsx';
 import { useTranslation } from '@/i18n/useI18n.ts';
 import { formatApiErrorForAlert } from '@/lib/api-error.ts';
 import { cn } from '@/lib/utils.ts';
@@ -39,9 +38,9 @@ function notReadyComponents(detail: string): string {
 
 export const SetupPage = ({ onComplete, className }: Props) => {
 	const { t } = useTranslation();
-	const [url, setUrl] = useState(getBaseUrl);
 	const [checking, setChecking] = useState(false);
 	const [errorMsg, setErrorMsg] = useState('');
+	const apiBaseUrl = getBaseUrl();
 
 	const describeFailure = (e: unknown): string => {
 		if (e instanceof ApiError) {
@@ -65,21 +64,15 @@ export const SetupPage = ({ onComplete, className }: Props) => {
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
-		const trimmedUrl = url.trim().replace(/\/+$/, '');
 
 		setChecking(true);
 		setErrorMsg('');
 		try {
-			// Persist only after the backend confirms the address works, so a
-			// failed attempt cannot break every later authenticated request.
-			const health = (await healthApi.check(trimmedUrl)) as Partial<HealthResponse>;
-			// Valid JSON that is not a health report means the address points
-			// at some other service that happens to answer 200.
+			const health = (await healthApi.check()) as Partial<HealthResponse>;
 			if (typeof health.version !== 'string' || !health.components) {
 				setErrorMsg(t('setup.errorNotAgentScope'));
 				return;
 			}
-			localStorage.setItem('server_url', trimmedUrl);
 			onComplete();
 		} catch (err) {
 			setErrorMsg(describeFailure(err));
@@ -99,19 +92,9 @@ export const SetupPage = ({ onComplete, className }: Props) => {
 					<CardContent>
 						<form onSubmit={handleSubmit}>
 							<FieldGroup>
-								<Field>
-									<FieldLabel htmlFor="server-url-input">
-										{t('setup.serverUrl')}
-									</FieldLabel>
-									<Input
-										id="server-url-input"
-										type="url"
-										placeholder={t('setup.serverUrlPlaceholder')}
-										value={url}
-										onChange={(e) => setUrl(e.target.value)}
-										required
-									/>
-								</Field>
+								<FieldDescription>
+									{t('setup.serverUrl')}: <code>{apiBaseUrl}</code>
+								</FieldDescription>
 								{errorMsg && (
 									<Alert variant="destructive">
 										<CircleAlert />

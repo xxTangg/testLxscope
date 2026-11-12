@@ -5,13 +5,10 @@ import type { HealthResponse } from './types';
 const HEALTH_TIMEOUT_MS = 10_000;
 
 export const healthApi = {
-	/**
-	 * Probe a backend address before it is persisted.
-	 */
-	check: (baseUrl: string) =>
+	/** Probe the backend through the same-origin reverse proxy. */
+	check: () =>
 		client.get<HealthResponse>('/health', undefined, {
 			silent: true,
-			baseUrl,
 			timeoutMs: HEALTH_TIMEOUT_MS,
 		}),
 };

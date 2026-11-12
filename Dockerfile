@@ -19,6 +19,10 @@ RUN apt-get update \
         build-essential \
         ripgrep \
         ca-certificates \
+        fonts-noto-cjk \
+        libreoffice-calc \
+        libreoffice-impress \
+        libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
 
 # Bake the MCP server and a headless Chromium into the image. This avoids an
@@ -49,6 +53,7 @@ RUN /opt/venv/bin/pip install \
         reportlab \
         python-docx \
         python-pptx \
+        PyYAML \
         Pillow \
     && npm install --global pptxgenjs
 

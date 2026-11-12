@@ -35,6 +35,7 @@ from ...tool import (
 from ...workspace import WorkspaceBase
 from ..access import ResourceKind
 from ._access import ResourceAccessService
+from ._builtin_skills import list_workspace_skills
 
 
 async def get_toolkit(
@@ -299,8 +300,8 @@ time or interval"
 
     return Toolkit(
         tools=tools,
-        skills_or_loaders=await workspace.list_skills(
-            agent_id=agent_record.id,
+        skills_or_loaders=await list_workspace_skills(
+            workspace, agent_record.id,
         ),
         mcps=await workspace.list_mcps(
             agent_id=agent_record.id,
