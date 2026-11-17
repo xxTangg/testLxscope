@@ -14,6 +14,7 @@ async function fetchGroups(): Promise<Record<string, CredentialWithRealtimeModel
 	const credentialsByProvider: Record<string, CredentialView[]> = {};
 
 	for (const credential of credentials) {
+		if (credential.enabled === false) continue;
 		const provider = credential.data.type as string | undefined;
 		if (!provider) continue;
 		(credentialsByProvider[provider] ??= []).push(credential);

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Session router — create, list, update, delete, stream, and get messages."""
+
 import asyncio
 import json
 from typing import AsyncGenerator
@@ -17,6 +18,7 @@ from ..deps import (
     get_session_service,
     get_storage,
     get_workspace_manager,
+    get_workspace_service,
 )
 from ._schema import (
     CreateSessionRequest,
@@ -36,6 +38,7 @@ from .._service import (
     ResourceAccessService,
     ChatService,
     SessionService,
+    WorkspaceService,
     SessionStatus,
     SessionProjection,
     SubagentHitlProjector,
@@ -52,7 +55,8 @@ from ..storage import (
     TeamRecord,
 )
 from ...message import ToolCallState
-from ...state import ToolContext
+from ...permission import PermissionContext, PermissionMode
+from ...state import AgentState, ToolContext
 from ..storage._utils import _ensure_team_members, _resolve_team_leader
 from ...event import CustomEvent
 from ..workspace_manager import WorkspaceManagerBase
@@ -311,7 +315,7 @@ async def create_session(
         workspace_manager (`WorkspaceManagerBase`): Injected workspace
             manager; consulted via
             :meth:`WorkspaceManagerBase.assign_workspace_id` to fill in
-            ``workspace_id`` when the request body omits it.
+            the server-owned workspace binding.
         access (`ResourceAccessService`): Injected access service.
 
     Returns:
@@ -342,16 +346,10 @@ async def create_session(
         body.knowledge_config,
     )
 
-    # Resolve the workspace binding for this session. Explicit
-    # ``body.workspace_id`` always wins (used by team invite / borrow
-    # flows to force sharing); otherwise defer to the manager's
-    # isolation policy — see ``WorkspaceManagerBase.assign_workspace_id``.
-    resolved_workspace_id = body.workspace_id or (
-        await workspace_manager.assign_workspace_id(
-            user_id=user_id,
-            agent_id=body.agent_id,
-            session_id=_generate_id(),
-        )
+    resolved_workspace_id = await workspace_manager.assign_workspace_id(
+        user_id=user_id,
+        agent_id=body.agent_id,
+        session_id=_generate_id(),
     )
 
     session_record = await storage.upsert_session(
@@ -369,6 +367,14 @@ async def create_session(
             # to replace once the conversation says what it is about.
             naming=SessionNaming(auto=body.name is None),
             **({"name": body.name} if body.name is not None else {}),
+        ),
+        # Set the default only for newly opened interactive sessions.
+        # Loading old records and explicitly configured background sessions
+        # must retain their existing permission policy.
+        state=AgentState(
+            permission_context=PermissionContext(
+                mode=PermissionMode.ACCEPT_EDITS,
+            ),
         ),
     )
     return CreateSessionResponse(session_id=session_record.id)
@@ -471,6 +477,7 @@ async def update_session(
     storage: StorageBase = Depends(get_storage),
     access: ResourceAccessService = Depends(get_resource_access_service),
     message_bus: MessageBus = Depends(get_message_bus),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
 ) -> SessionRecord:
     """Update the configuration of an existing session.
 
@@ -559,6 +566,15 @@ async def update_session(
         exclude={"permission_mode"},
     )
 
+    if "cwd" in config_updates and config_updates["cwd"] is not None:
+        workspace = await workspace_service.resolve(
+            user_id, agent_id, session_id
+        )
+        target = await workspace_service.resolve_path(
+            workspace, config_updates["cwd"], directory=True
+        )
+        config_updates["cwd"] = workspace.virtual_file_path(target)
+
     # An explicit rename settles the name for good — auto-naming must
     # not overwrite what the user just typed.
     if "name" in config_updates:
@@ -591,8 +607,7 @@ async def update_session(
 async def list_messages(
     session_id: str,
     agent_id: str = Query(description="Agent the session belongs to."),
-    before: str
-    | None = Query(
+    before: str | None = Query(
         None,
         description=(
             "A message ID used as the pagination cursor. Omit to get "
@@ -600,8 +615,7 @@ async def list_messages(
             "response to load older messages."
         ),
     ),
-    offset: int
-    | None = Query(
+    offset: int | None = Query(
         None,
         deprecated=True,
         description=(
@@ -815,8 +829,7 @@ async def _worker_still_asking(
 async def stream_session_events(
     session_id: str,
     agent_id: str = Query(description="Agent the session belongs to."),
-    after: str
-    | None = Query(
+    after: str | None = Query(
         None,
         description=("Replay only events after this checkpoint cursor."),
     ),

@@ -1,76 +1,70 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback } from 'react';
 
 import { credentialApi } from '../api';
-import type { CredentialView, CreateCredentialRequest, UpdateCredentialRequest } from '../api';
+import type { CreateCredentialRequest, UpdateCredentialRequest } from '../api';
 import { AVAILABLE_MODELS_KEY } from './useAvailableModels';
 import { AVAILABLE_REALTIME_MODELS_KEY } from './useAvailableRealtimeModels';
 
-/**
- * Manages API key credentials with CRUD operations.
- * Fetches on mount and automatically re-fetches after each mutation.
- */
+const CREDENTIALS_KEY = ['credentials'];
+
+/** Share credential records across the management page and all credential dialogs. */
 export function useCredentials() {
-	const [credentials, setCredentials] = useState<CredentialView[]>([]);
-	const [loading, setLoading] = useState(false);
-	const [error, setError] = useState<Error | null>(null);
 	const queryClient = useQueryClient();
-
-	const refetch = useCallback(async () => {
-		setLoading(true);
-		setError(null);
-		try {
-			const res = await credentialApi.list();
-			setCredentials(res.credentials);
-		} catch (e) {
-			setError(e as Error);
-		} finally {
-			setLoading(false);
-		}
-	}, []);
-
-	useEffect(() => {
-		refetch();
-	}, [refetch]);
-
-	// Every model picker derives its options from the credentials, so a
-	// credential change must invalidate both cached model catalogues.
+	const query = useQuery({
+		queryKey: CREDENTIALS_KEY,
+		queryFn: async () => (await credentialApi.list()).credentials,
+	});
 	const refresh = useCallback(async () => {
-		await refetch();
 		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: CREDENTIALS_KEY }),
 			queryClient.invalidateQueries({ queryKey: AVAILABLE_MODELS_KEY }),
 			queryClient.invalidateQueries({ queryKey: AVAILABLE_REALTIME_MODELS_KEY }),
 		]);
-	}, [refetch, queryClient]);
+	}, [queryClient]);
 
-	/** Stores a new credential and refreshes the list. */
 	const create = useCallback(
 		async (body: CreateCredentialRequest) => {
-			const res = await credentialApi.create(body);
+			const result = await credentialApi.create(body);
 			await refresh();
-			return res;
+			return result;
 		},
 		[refresh],
 	);
 
-	/** Replaces a credential's payload and refreshes the list. */
 	const update = useCallback(
-		async (credentialId: string, body: UpdateCredentialRequest) => {
-			const res = await credentialApi.update(credentialId, body);
+		async (id: string, body: UpdateCredentialRequest) => {
+			const result = await credentialApi.update(id, body);
 			await refresh();
-			return res;
+			return result;
 		},
 		[refresh],
 	);
 
-	/** Permanently deletes a credential and refreshes the list. */
 	const remove = useCallback(
-		async (credentialId: string) => {
-			await credentialApi.delete(credentialId);
+		async (id: string) => {
+			await credentialApi.delete(id);
 			await refresh();
 		},
 		[refresh],
 	);
 
-	return { credentials, loading, error, refetch, create, update, remove };
+	const setEnabled = useCallback(
+		async (id: string, enabled: boolean) => {
+			await credentialApi.setEnabled(id, enabled);
+			await refresh();
+		},
+		[refresh],
+	);
+
+	return {
+		credentials: query.data ?? [],
+		loading: query.isPending,
+		error: query.error,
+		refetch: query.refetch,
+		create,
+		update,
+		remove,
+		setEnabled,
+	};
 }

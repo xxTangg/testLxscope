@@ -1,0 +1,10 @@
+FROM api-image
+# The worker keeps installed runtimes, not the service source or configuration.
+RUN rm -rf /app && mkdir -p /workspace /opt/runner \
+    && chown -R 1000:1000 /workspace \
+    && /opt/venv/bin/python -c "from pathlib import Path; import os; os.symlink(next(Path('/ms-playwright').glob('chromium-*/chrome-linux*/chrome')), '/usr/local/bin/agentscope-chromium')" \
+    && /opt/venv/bin/python -c "from agentscope.workspace._utils import _read_glob_helper_bytes; from pathlib import Path; Path('/opt/runner/_glob_helper.py').write_bytes(_read_glob_helper_bytes())"
+ENV PYTHONPATH="" HOME=/workspace/.home
+USER 1000:1000
+WORKDIR /workspace
+CMD ["python", "-m", "agentscope.workspace._mcp_gateway", "--port", "5600"]

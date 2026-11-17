@@ -152,6 +152,10 @@ class WorkspaceManagerBase(ABC):
             self._reserved[(user_id, agent_id)] = workspace_id
             return workspace_id
 
+    async def new_workspace_id(self, *, user_id: str) -> str:
+        """Issue a fresh workspace for an account without reusing a binding."""
+        return await self._mint_workspace_id()
+
     async def _mint_workspace_id(self) -> str:
         """Produce an id for a workspace nobody holds yet.
 

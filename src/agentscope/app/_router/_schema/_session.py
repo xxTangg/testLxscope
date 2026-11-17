@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Request / response schemas for the session router."""
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from ....permission import PermissionMode
 from ...storage import (
@@ -57,18 +58,9 @@ class TeamDetailResponse(BaseModel):
 class CreateSessionRequest(BaseModel):
     """Request body for creating a new session."""
 
+    model_config = ConfigDict(extra="forbid")
+
     agent_id: str = Field(description="Agent this session belongs to.")
-    workspace_id: str | None = Field(
-        default=None,
-        description=(
-            "Optional explicit workspace binding. When omitted the "
-            "server calls "
-            "``WorkspaceManagerBase.assign_workspace_id`` under the "
-            "configured isolation policy. Set only to force a "
-            "specific binding (e.g. share workspace with another "
-            "existing session)."
-        ),
-    )
     name: str | None = Field(
         default=None,
         description="Display name. Defaults to current datetime if omitted.",
@@ -154,9 +146,9 @@ class UpdateSessionRequest(BaseModel):
     cwd: str | None = Field(
         default=None,
         description=(
-            "New working directory — absolute, or relative to the "
-            "workspace root, and not confined to it. Pass null to "
-            "reset to the root; omit to leave unchanged."
+            "Directory inside the personal space (~), or relative to "
+            "the Agent workspace. "
+            "Pass null to reset to the Agent workspace; omit to keep it."
         ),
     )
 

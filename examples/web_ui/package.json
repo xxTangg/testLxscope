@@ -2,6 +2,7 @@
 	"name": "agentscope-web-ui",
 	"version": "1.0.0",
 	"private": true,
+	"packageManager": "pnpm@11.25.0",
 	"scripts": {
 		"dev:frontend": "pnpm --filter frontend dev",
 		"dev:backend": "pnpm --filter backend dev",

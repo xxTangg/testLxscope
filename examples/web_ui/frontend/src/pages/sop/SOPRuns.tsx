@@ -245,7 +245,7 @@ function RunDetail({
 						className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
 					>
 						<div
-							className="h-full rounded-full bg-foreground/70 transition-[width] motion-reduce:transition-none"
+							className="h-full rounded-full bg-foreground-alpha-70 transition-[width] motion-reduce:transition-none"
 							style={{
 								width: `${(completed / Math.max(1, run.definition.steps.length)) * 100}%`,
 							}}
@@ -335,7 +335,7 @@ function RunDetail({
 									{state?.error && (
 										<p
 											role="alert"
-											className="rounded-lg bg-destructive/5 p-3 text-xs leading-relaxed text-destructive"
+											className="rounded-lg bg-destructive-alpha-5 p-3 text-xs leading-relaxed text-destructive"
 										>
 											{state.error}
 										</p>

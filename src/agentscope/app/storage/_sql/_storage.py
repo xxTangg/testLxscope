@@ -16,6 +16,7 @@ nodes in a distributed deployment regardless of each node's local
 timezone, while staying tz-naive so the plain ``DateTime`` columns
 need no dialect-specific timezone handling.
 """
+
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Self
 
@@ -691,6 +692,8 @@ class AsyncSQLAlchemyStorage(StorageBase):
         base_name = (
             cred_type.removesuffix("_credential").replace("_", " ").title()
         )
+        if cred_type == "newapi_credential":
+            base_name = "longxinAI"
         if not base_name:
             base_name = "Credential"
 
@@ -1356,10 +1359,13 @@ class AsyncSQLAlchemyStorage(StorageBase):
         session_id: str,
     ) -> SessionRecord | None:
         """One session; owner-scoped."""
-        _ = agent_id
         async with self._session() as sess:
             row = await sess.get(SessionRow, session_id)
-        if row is None or row.user_id != user_id:
+        if (
+            row is None
+            or row.user_id != user_id
+            or (agent_id and row.agent_id != agent_id)
+        ):
             return None
         return _to_record(row, SessionRecord)
 

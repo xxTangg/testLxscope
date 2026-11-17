@@ -63,6 +63,7 @@ class CredentialView(CredentialRecord):
             "Whether the current viewer may PATCH/DELETE this credential."
         ),
     )
+    enabled: bool = True
 
 
 class KnowledgeBaseStatusCounts(BaseModel):
@@ -411,6 +412,8 @@ class ResourceAccessService:
         self,
         viewer_id: str,
         credential_id: str,
+        *,
+        allow_disabled: bool = False,
     ) -> CredentialRecord:
         """Resolve a credential for runtime use — returns the raw record.
 
@@ -418,9 +421,15 @@ class ResourceAccessService:
         the caller is expected to feed the ``data`` payload into a
         provider client. Restrict use to trusted runtime paths
         (chat / embedding / TTS model construction).
+
+        Disabled credentials are rejected unless ``allow_disabled`` is set
+        for a metadata-only catalogue lookup. Runtime model construction
+        must keep the default.
         """
         record = await self._storage.get_credential(viewer_id, credential_id)
         if record is not None:
+            if not allow_disabled:
+                self.ensure_credential_enabled(record)
             return record
 
         for ref in await self._list_refs(viewer_id, ResourceKind.CREDENTIAL):
@@ -431,8 +440,18 @@ class ResourceAccessService:
                 ref.resource_id,
             )
             if record is not None:
+                if not allow_disabled:
+                    self.ensure_credential_enabled(record)
                 return record
         raise self._not_found(ResourceKind.CREDENTIAL, credential_id)
+
+    @staticmethod
+    def ensure_credential_enabled(record: CredentialRecord) -> None:
+        """Reject model calls through a credential that has been disabled."""
+        if record.data.get("enabled", True) is False:
+            raise HTTPException(
+                status_code=403, detail="This credential is disabled."
+            )
 
     async def resolve_agent(
         self,
@@ -593,6 +612,7 @@ class ResourceAccessService:
         """
         if isinstance(record, CredentialRecord):
             payload = record.model_dump()
+            payload["enabled"] = record.data.get("enabled", True)
             if record.user_id != viewer_id:
                 payload["data"] = {
                     k: payload["data"][k]

@@ -7,14 +7,14 @@ The HTTP layer is intentionally thin — every endpoint translates the
 request into a single :class:`~agentscope.app._service.
 KnowledgeBaseService` call and returns the result.
 """
-from urllib.parse import quote
+
+from .._service._file_response import file_headers
 
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
-    Header,
     HTTPException,
     Path,
     Query,
@@ -32,6 +32,7 @@ from ..deps import (
     get_knowledge_chunkers,
     get_knowledge_parsers,
     get_resource_access_service,
+    get_storage,
 )
 from ._schema import (
     ChunkerInfo,
@@ -53,7 +54,16 @@ from ._schema import (
     UpdateKnowledgeBaseRequest,
     UploadKnowledgeDocumentResponse,
 )
-from ...credential import CredentialFactory
+from ...credential import CredentialFactory, NewAPICredential
+from ._schema._knowledge_base import (
+    KbEmbeddingProbeRequest,
+    KbEmbeddingProbeResponse,
+)
+from .._service._newapi import (
+    NewAPIModelCandidate,
+    get_owned_newapi_gateway,
+)
+from ..storage import StorageBase
 from ..rag.knowledge_base_manager import KnowledgeBaseManagerBase
 from .._service import (
     KnowledgeBaseService,
@@ -64,7 +74,6 @@ from .._service import (
 )
 from ...middleware import RAGMiddleware
 from ...rag import ChunkerBase, ParserBase
-
 
 knowledge_base_router = APIRouter(
     prefix="/knowledge_bases",
@@ -93,8 +102,9 @@ async def list_kb_embedding_models(
     manager's :class:`DimensionPolicy`. Incompatible cards are
     dropped; matryoshka cards under a ``FIXED`` /
     ``LOCKED_BY_EXISTING`` policy are narrowed to the locked
-    dimension.  Providers that end up with zero compatible models are
-    omitted from the response entirely.
+    dimension. New API credentials are also returned with an empty
+    catalogue so callers can discover models and measure their dimensions
+    when creating a knowledge base.
 
     Args:
         user_id (`str`):
@@ -108,14 +118,16 @@ async def list_kb_embedding_models(
 
     Returns:
         `ListKbEmbeddingModelsResponse`:
-            One entry per credential with at least one compatible
-            embedding model, plus the policy used for filtering.
+            Credentials with compatible model cards or gateway discovery,
+            plus the policy used for filtering.
     """
     policy = await manager.get_dimension_policy()
     credentials = await access.list_resource(user_id, ResourceKind.CREDENTIAL)
 
     providers: list[KbEmbeddingProvider] = []
     for credential in credentials:
+        if not credential.enabled:
+            continue
         credential_type = credential.data.get("type")
         if not credential_type:
             continue
@@ -124,22 +136,75 @@ async def list_kb_embedding_models(
         )
         if credential_cls is None:
             continue
-        embedding_cls = credential_cls.get_embedding_model_class()
-        if embedding_cls is None:
-            continue
+        if credential_cls is NewAPICredential:
+            # A knowledge base resolves its pinned credential under its owner.
+            if credential.user_id != user_id:
+                continue
+            cards = NewAPICredential.model_validate(
+                credential.data,
+            ).configured_embedding_models()
+            credential = credential.model_copy(
+                update={
+                    "data": {
+                        key: credential.data[key]
+                        for key in ("type", "name")
+                        if key in credential.data
+                    },
+                }
+            )
+        else:
+            embedding_cls = credential_cls.get_embedding_model_class()
+            if embedding_cls is None:
+                continue
+            cards = embedding_cls.list_models()
 
         filtered = []
-        for card in embedding_cls.list_models():
+        for card in cards:
             projected = policy.filter_card(card)
             if projected is not None:
                 filtered.append(projected)
-        if not filtered:
+        if not filtered and credential_cls is not NewAPICredential:
             continue
         providers.append(
             KbEmbeddingProvider(credential=credential, models=filtered),
         )
 
     return ListKbEmbeddingModelsResponse(providers=providers, policy=policy)
+
+
+@knowledge_base_router.get(
+    "/embedding_models/{credential_id}/discover",
+    response_model=list[NewAPIModelCandidate],
+)
+async def discover_kb_embedding_models(
+    credential_id: str,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> list[NewAPIModelCandidate]:
+    """Discover embeddings without exposing the saved credential key."""
+    gateway = await get_owned_newapi_gateway(user_id, credential_id, storage)
+    return [
+        model
+        for model in await gateway.list_models()
+        if not model.capabilities_known or "embedding" in model.capabilities
+    ]
+
+
+@knowledge_base_router.post(
+    "/embedding_models/{credential_id}/dimensions",
+    response_model=KbEmbeddingProbeResponse,
+)
+async def probe_kb_embedding(
+    credential_id: str,
+    body: KbEmbeddingProbeRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> KbEmbeddingProbeResponse:
+    """Measure the selected model before a knowledge base is created."""
+    gateway = await get_owned_newapi_gateway(user_id, credential_id, storage)
+    return KbEmbeddingProbeResponse(
+        dimensions=await gateway.embedding_dimensions(body.model),
+    )
 
 
 @knowledge_base_router.get(
@@ -221,8 +286,7 @@ async def get_kb_middleware_parameters_schema(
 )
 async def list_supported_content_types(
     _: str = Depends(get_current_user_id),
-    parsers: list[ParserBase]
-    | dict[str, ParserBase] = Depends(
+    parsers: list[ParserBase] | dict[str, ParserBase] = Depends(
         get_knowledge_parsers,
     ),
 ) -> ListSupportedContentTypesResponse:
@@ -310,16 +374,14 @@ async def create_knowledge_base(
     summary="List the caller's knowledge bases",
 )
 async def list_knowledge_bases(
-    id: str  # pylint: disable=redefined-builtin  # noqa: A002
-    | None = Query(
+    id: str | None = Query(  # pylint: disable=redefined-builtin  # noqa: A002
         default=None,
         description=(
             "Filter down to one knowledge base — the list endpoint "
             "doubles as get-single, RAGFlow style."
         ),
     ),
-    name: str
-    | None = Query(
+    name: str | None = Query(
         default=None,
         description="Case-insensitive substring filter on the name.",
     ),
@@ -464,18 +526,15 @@ async def delete_knowledge_base(
 )
 async def list_knowledge_documents(
     knowledge_base_id: str = Path(description="The knowledge base id."),
-    id: str  # pylint: disable=redefined-builtin  # noqa: A002
-    | None = Query(
+    id: str | None = Query(  # pylint: disable=redefined-builtin  # noqa: A002
         default=None,
         description="Filter down to one document by id.",
     ),
-    keywords: str
-    | None = Query(
+    keywords: str | None = Query(
         default=None,
         description="Case-insensitive substring filter on the filename.",
     ),
-    status_filter: str
-    | None = Query(
+    status_filter: str | None = Query(
         default=None,
         alias="status",
         pattern="^(pending|parsing|chunking|indexing|ready|error)$",
@@ -601,8 +660,7 @@ async def upload_knowledge_document(
     file: UploadFile = File(
         description="The document to index (PDF, TXT, Markdown, …).",
     ),
-    content_type: str
-    | None = Form(
+    content_type: str | None = Form(
         default=None,
         description=(
             "Override the IANA media type used to route the upload. "
@@ -723,25 +781,6 @@ async def search_knowledge_base(
     return SearchKnowledgeBaseResponse(results=results, total=len(results))
 
 
-# The media types a browser may render inline. Anything else (notably
-# text/html and image/svg+xml, which can run script) is forced to an
-# attachment so a crafted upload cannot XSS the app origin. Raster
-# image formats are enumerated rather than matched by ``image/``
-# prefix precisely so that SVG never slips through.
-_INLINE_MEDIA_TYPES = frozenset(
-    {
-        "text/plain",
-        "text/markdown",
-        "application/pdf",
-        "image/png",
-        "image/jpeg",
-        "image/gif",
-        "image/webp",
-        "image/bmp",
-    },
-)
-
-
 # Preview tokens outlive a download capability on purpose: a PDF
 # viewer embedded in an <iframe> re-requests the file as the reader
 # pages through it, and a 60-second window would 401 mid-read.
@@ -822,7 +861,7 @@ async def create_document_download_token(
 
     ``<iframe>`` PDF previews, ``<img>`` tags and click-to-download
     navigations carry no custom headers, so they cannot present
-    ``X-User-ID``; the token rides in the URL instead and is bound to
+    the Authorization header; the token rides in the URL and is bound to
     exactly this document.
 
     Args:
@@ -864,17 +903,9 @@ async def read_knowledge_document(
         default=False,
         description="Force a Content-Disposition attachment.",
     ),
-    token: str
-    | None = Query(
-        default=None,
-        description=(
-            "A token from ``POST .../documents/{document_id}"
-            "/download_token``, accepted in place of the "
-            "``X-User-ID`` header so a browser navigation can fetch "
-            "the file directly."
-        ),
+    token: str = Query(
+        ..., description="Signed document download capability."
     ),
-    x_user_id: str | None = Header(default=None),
     service: "KnowledgeBaseService" = Depends(get_knowledge_base_service),
     download_secret: str = Depends(get_download_secret),
 ) -> StreamingResponse:
@@ -893,10 +924,8 @@ async def read_knowledge_document(
             The document whose original file should be fetched.
         download (`bool`, defaults to ``False``):
             Force an attachment disposition.
-        token (`str | None`, optional):
-            Signed download token, accepted instead of ``X-User-ID``.
-        x_user_id (`str | None`, optional):
-            The normal identity header.
+        token (`str`):
+            Signed document download capability.
         service (`KnowledgeBaseService`):
             Injected knowledge base service.
         download_secret (`str`):
@@ -907,25 +936,14 @@ async def read_knowledge_document(
             The file bytes with content-type / length / disposition
             headers derived from the upload-time record.
     """
-    if token is not None:
-        try:
-            user_id = verify_download_token(
-                download_secret,
-                token,
-                _document_token_path(knowledge_base_id, document_id),
-            )
-        except ValueError as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(e),
-            ) from e
-    elif x_user_id:
-        user_id = x_user_id
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-User-ID header or download token is required.",
+    try:
+        user_id = verify_download_token(
+            download_secret,
+            token,
+            _document_token_path(knowledge_base_id, document_id),
         )
+    except ValueError as exc:
+        raise HTTPException(401, "Invalid or expired download token.") from exc
 
     record, size, content = await service.stream_document_content(
         user_id=user_id,
@@ -936,16 +954,7 @@ async def read_knowledge_document(
     media_type = (data.content_type or "").split(";")[
         0
     ].strip().lower() or "application/octet-stream"
-    inline = not download and media_type in _INLINE_MEDIA_TYPES
-    disposition = "inline" if inline else "attachment"
-    filename = quote(data.filename or "download")
-    headers = {
-        "Content-Disposition": (f"{disposition}; filename*=UTF-8''{filename}"),
-        "Cache-Control": "private, max-age=60",
-        # The declared type is authoritative — never let the browser
-        # sniff a scriptable type out of the bytes.
-        "X-Content-Type-Options": "nosniff",
-    }
+    headers = file_headers(data.filename or "download", media_type, download)
     # Measured on the blob, never read off the record: a wrong length
     # truncates the body. Present, it turns the browser's download
     # progress from a byte counter into a percentage; absent (backend

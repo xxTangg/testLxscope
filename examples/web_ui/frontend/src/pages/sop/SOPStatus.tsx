@@ -9,7 +9,7 @@ const styles: Record<SOPPhase, string> = {
 	running: 'bg-blue-500/8 text-blue-600 dark:text-blue-400',
 	awaiting: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
 	completed: 'bg-emerald-500/8 text-emerald-700 dark:text-emerald-400',
-	failed: 'bg-destructive/8 text-destructive',
+	failed: 'bg-destructive-alpha-8 text-destructive',
 	blocked: 'bg-muted text-muted-foreground',
 	retry_wait: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
 	cancelled: 'bg-muted text-muted-foreground',

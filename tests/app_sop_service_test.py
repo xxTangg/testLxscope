@@ -7,9 +7,11 @@ submit tools a real agent would call. What is under test is the
 service's own reasoning — which session gets the turn, what it reads
 back, and where the run stops.
 """
+
 import asyncio
 from contextlib import AsyncExitStack
 from typing import Any
+from uuid import uuid4
 from unittest.async_case import IsolatedAsyncioTestCase
 
 from utils import AnyString
@@ -45,6 +47,9 @@ class _Workspaces:
     def __init__(self) -> None:
         """Start out having closed nothing."""
         self.closed: list[str] = []
+
+    async def new_workspace_id(self, *, user_id: str) -> str:
+        return f"{user_id}/sessions/{uuid4().hex}"
 
     async def close(self, workspace_id: str) -> None:
         """Remember the workspace."""

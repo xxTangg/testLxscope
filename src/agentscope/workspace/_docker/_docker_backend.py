@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """Docker container :class:`BackendBase` implementation.
 
-Wraps the ``aiodocker`` container APIs (``exec``, ``get_archive``,
-``put_archive``) into the three backend primitives (``exec_shell``,
+Wraps the ``aiodocker`` exec API into the backend primitives (``exec_shell``,
 ``read_file``, ``write_file``) so that builtin tools (Bash, Read,
 Write, Edit, Grep, Glob) can operate inside a Docker container
 transparently.  All derived filesystem helpers (``file_exists``,
@@ -14,12 +13,13 @@ inherited from :class:`BackendBase`, which implements them via
 from __future__ import annotations
 
 import asyncio
-import io
-import posixpath
-import tarfile
-from typing import Any
+import json
+import struct
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 from ...tool import BackendBase, ExecResult
+from ...tool._builtin._backend import OpenedFile, _SAFE_READ_SHIM
 
 
 class DockerBackend(BackendBase):
@@ -49,6 +49,41 @@ class DockerBackend(BackendBase):
         """
         self._container = container
         self._workdir = workdir
+
+    @asynccontextmanager
+    async def open_read(
+        self, path: str, *, root: str
+    ) -> AsyncIterator[OpenedFile]:
+        execution = await self._container.exec(
+            cmd=["python3", "-c", _SAFE_READ_SHIM, root, path]
+        )
+        async with execution.start() as transport:
+            buffer = b""
+            while b"\n" not in buffer:
+                message = await transport.read_out()
+                if message is None:
+                    raise OSError(
+                        "File reader stopped before opening the file."
+                    )
+                if message.stream == 1:
+                    buffer += message.data
+            header, buffer = buffer.split(b"\n", 1)
+            metadata = json.loads(header)
+            if metadata.get("error") == 404:
+                raise FileNotFoundError(path)
+            if metadata.get("error"):
+                raise PermissionError(
+                    "File is outside the personal space or is a link."
+                )
+
+            async def content() -> AsyncIterator[bytes]:
+                if buffer:
+                    yield buffer
+                while message := await transport.read_out():
+                    if message.stream == 1:
+                        yield message.data
+
+            yield OpenedFile(metadata["size"], content())
 
     # ── exec ───────────────────────────────────────────────────────
 
@@ -134,60 +169,59 @@ class DockerBackend(BackendBase):
     # ── file I/O ───────────────────────────────────────────────────
 
     async def read_file(self, path: str) -> bytes:
-        """Fetch a file from the container via ``get_archive``.
-
-        Args:
-            path (`str`):
-                Path to the file inside the container.
-
-        Returns:
-            `bytes`:
-                The raw file contents.
-
-        Raises:
-            `FileNotFoundError`:
-                If the path does not exist inside the container.
-        """
-        from aiodocker import exceptions as aiodocker_exceptions
-
-        try:
-            tar = await self._container.get_archive(path)
-        except aiodocker_exceptions.DockerError as exc:
-            if exc.status == 404:
-                raise FileNotFoundError(
-                    f"not found in container: {path}",
-                ) from exc
-            raise
-
-        try:
-            for member in tar.getmembers():
-                if member.isfile():
-                    f = tar.extractfile(member)
-                    if f:
-                        return f.read()
-        finally:
-            tar.close()
-        raise FileNotFoundError(f"not found in container: {path}")
+        """Read as the sandbox user, never through the daemon archive API."""
+        result = await self.exec_shell(
+            [
+                "python3",
+                "-c",
+                "import sys; "
+                "sys.stdout.buffer.write(open(sys.argv[1],'rb').read())",
+                path,
+            ]
+        )
+        if not result.ok():
+            raise FileNotFoundError(path)
+        return result.stdout
 
     async def write_file(self, path: str, data: bytes) -> None:
-        """Write raw bytes to a file inside the container.
+        async def content() -> AsyncIterator[bytes]:
+            yield data
 
-        Creates the parent directory first since ``put_archive``
-        requires it to exist.
+        await self.write_stream(path, content())
 
-        Args:
-            path (`str`):
-                Destination path inside the container.
-            data (`bytes`):
-                The raw bytes to write.
-        """
-        parent = posixpath.dirname(path) or "/"
-        name = posixpath.basename(path)
-
-        await self.exec_shell(["mkdir", "-p", parent])
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w") as tf:
-            info = tarfile.TarInfo(name=name)
-            info.size = len(data)
-            tf.addfile(info, io.BytesIO(data))
-        await self._container.put_archive(parent, buf.getvalue())
+    async def write_stream(
+        self, path: str, stream: AsyncIterator[bytes]
+    ) -> None:
+        """Frame streamed input to a process running with the sandbox UID."""
+        script = """
+import os,sys,struct
+path=sys.argv[1]
+os.makedirs(os.path.dirname(path),exist_ok=True)
+with open(path,'wb') as f:
+ while True:
+  header=sys.stdin.buffer.read(8)
+  if len(header)!=8: raise EOFError('Incomplete upload')
+  size=struct.unpack('!Q',header)[0]
+  if size==0: break
+  while size:
+   data=sys.stdin.buffer.read(min(size,1048576))
+   if not data: raise EOFError('Incomplete upload')
+   f.write(data);size-=len(data)
+"""
+        execution = await self._container.exec(
+            cmd=["python3", "-c", script, path], stdin=True
+        )
+        async with execution.start() as transport:
+            async for chunk in stream:
+                if chunk:
+                    await transport.write_in(
+                        struct.pack("!Q", len(chunk)) + chunk
+                    )
+            await transport.write_in(struct.pack("!Q", 0))
+            errors = []
+            while message := await transport.read_out():
+                if message.stream == 2:
+                    errors.append(message.data)
+        info = await execution.inspect()
+        if info.get("ExitCode") != 0:
+            raise OSError(b"".join(errors).decode(errors="replace"))

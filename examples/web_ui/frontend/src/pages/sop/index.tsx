@@ -154,7 +154,7 @@ export function SOPPage() {
 			<main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] bg-card shadow-panel">
 				<header className="flex shrink-0 items-start justify-between gap-4 border-b px-5 pt-5 pb-4 sm:px-6">
 					<div>
-						<h1 className="text-2xl font-semibold tracking-tight">{t('common.sop')}</h1>
+						<h1 className="text-2xl font-semibold tracking-tight">{t('sop.title')}</h1>
 						<p className="mt-1 text-sm text-muted-foreground">{t('sop.subtitle')}</p>
 					</div>
 					<Button className="mt-0.5" onClick={() => setEditor({ sop: null })}>
@@ -244,7 +244,7 @@ export function SOPPage() {
 												className={cn(
 													'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground',
 													selected?.id === sop.id &&
-														'bg-foreground/5 text-foreground',
+														'bg-foreground-alpha-5 text-foreground',
 												)}
 											>
 												<Workflow className="size-4" />
@@ -584,7 +584,7 @@ function SOPDescription({ sop }: { sop: SOPRecord }) {
 					</Button>
 				</DialogTrigger>
 			</div>
-			<DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+			<DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden p-0 supports-[height:100dvh]:max-h-[calc(100dvh-2rem)] sm:max-w-2xl">
 				<DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
 					<DialogTitle>{t('sop.description')}</DialogTitle>
 					<DialogDescription className="line-clamp-2 [overflow-wrap:anywhere]">
@@ -595,7 +595,7 @@ function SOPDescription({ sop }: { sop: SOPRecord }) {
 					tabIndex={0}
 					role="region"
 					aria-label={t('sop.fullDescription')}
-					className="max-h-[60dvh] min-h-0 overflow-y-auto overscroll-contain whitespace-pre-wrap px-5 py-4 text-sm leading-7 [overflow-wrap:anywhere]"
+					className="max-h-[60vh] min-h-0 overflow-y-auto overscroll-contain whitespace-pre-wrap px-5 py-4 text-sm leading-7 [overflow-wrap:anywhere] supports-[height:100dvh]:max-h-[60dvh]"
 				>
 					{sop.data.description}
 				</div>

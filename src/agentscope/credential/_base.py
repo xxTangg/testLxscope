@@ -28,6 +28,11 @@ class CredentialBase(BaseModel):
         description="User-facing display name for this credential.",
     )
 
+    enabled: bool = Field(
+        default=True,
+        description="Whether this credential can be used for model requests.",
+    )
+
     @classmethod
     def get_chat_model_class(cls) -> Type["ChatModelBase"]:
         """Return the :class:`ChatModelBase` subclass that consumes this

@@ -24,6 +24,9 @@ export const realtimeModelApi = {
 };
 
 export const embeddingModelApi = {
-	list: (provider: string) =>
-		client.get<ListEmbeddingModelResponse>('/embedding-model/', { provider }),
+	list: (provider: string, credentialId?: string) =>
+		client.get<ListEmbeddingModelResponse>(
+			'/embedding-model/',
+			credentialId ? { provider, credential_id: credentialId } : { provider },
+		),
 };

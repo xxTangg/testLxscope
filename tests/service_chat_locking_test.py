@@ -300,7 +300,12 @@ class TestChatServiceSessionLock(IsolatedAsyncioTestCase):
                 "messages": storage.messages,
             },
             {
-                "loaded_states": [initial_state, expected_state],
+                "loaded_states": [
+                    initial_state,
+                    initial_state,
+                    initial_state,
+                    expected_state,
+                ],
                 "observed_states": [prepared_state, expected_state],
                 "persisted_states": [expected_state, expected_state],
                 "final_state": expected_state,

@@ -163,8 +163,8 @@ export interface SessionConfig {
 	knowledge_config: SessionKnowledgeConfig | null;
 	workspace_id: string;
 	/**
-	 * Directory the session is focused on — absolute, or relative to the
-	 * workspace root, and not confined to it. `null` means the root.
+	 * Logical directory inside the account personal space (~).
+	 * `null` selects the Agent workspace.
 	 * Purely a viewing anchor; it does not move where tools execute.
 	 */
 	cwd: string | null;
@@ -190,7 +190,6 @@ export interface SessionRecord extends RecordBase {
 
 export interface CreateSessionRequest {
 	agent_id: string;
-	workspace_id?: string;
 	chat_model_config?: ChatModelConfig | null;
 	/** Optional fallback model. Omit (or pass null) for no fallback. */
 	fallback_chat_model_config?: ChatModelConfig | null;
@@ -238,8 +237,7 @@ export interface UpdateSessionRequest {
 	knowledge_config?: SessionKnowledgeConfig | null;
 	permission_mode?: PermissionMode;
 	/**
-	 * New working directory — absolute or relative to the workspace
-	 * root, and not confined to it. PATCH semantics:
+	 * Directory within the personal space (~). PATCH semantics:
 	 *   - omit the field → leave unchanged
 	 *   - set to `null`  → reset to the workspace root
 	 *   - set to a value → focus that directory
@@ -268,6 +266,7 @@ export interface ScheduleSessionsResponse {
 /** One entry in a workspace directory listing. */
 export interface DirectoryEntry {
 	name: string;
+	display_name: string;
 	is_dir: boolean;
 	/** Always null for a directory, and for a file the backend could not stat. */
 	size_bytes: number | null;
@@ -277,12 +276,9 @@ export interface DirectoryEntry {
 
 /** One directory level, plus the path it actually resolved to. */
 export interface DirectoryListing {
-	/**
-	 * Absolute path of the directory that was listed. The only way to
-	 * learn where a relative request landed — the workspace root is
-	 * backend-dependent and unknowable client-side.
-	 */
+	/** Logical path rooted at the current account's personal space (~). */
 	path: string;
+	parent_path: string | null;
 	entries: DirectoryEntry[];
 }
 
@@ -320,9 +316,9 @@ export interface GitStatus {
 
 /** Where a session is pointed, and the git state of that place. */
 export interface WorkspaceStatus {
-	/** Absolute path of the workspace root; not derivable client-side. */
+	/** Logical path of the Agent workspace within the personal space. */
 	workdir: string;
-	/** Absolute path the session is focused on. Equals `workdir` when unset. */
+	/** Logical directory the session is focused on. */
 	cwd: string;
 	/**
 	 * `null` when there is nothing to report — not a repository, git
@@ -451,6 +447,7 @@ export interface CredentialSchemasResponse {
 }
 
 export interface CredentialView extends RecordBase {
+	enabled?: boolean;
 	user_id: string;
 	/**
 	 * Credential payload. When the current viewer is not the owner
@@ -475,6 +472,7 @@ export interface CreateCredentialResponse {
 
 export interface UpdateCredentialRequest {
 	data: Record<string, unknown>;
+	models_confirmed?: boolean;
 }
 
 export interface CredentialListResponse {
@@ -567,9 +565,6 @@ export interface Skill {
  * anything for a single-host deployment. Upload a folder or install
  * from the library instead.
  */
-export interface AddSkillRequest {
-	skill_path: string;
-}
 
 // ─── Hub ──────────────────────────────────────────────────────────────────────
 
@@ -773,12 +768,7 @@ export interface SkillRecord extends SkillView {
 // ─── Schedule ─────────────────────────────────────────────────────────────────
 
 export type PermissionMode =
-	| 'default'
-	| 'accept_edits'
-	| 'explore'
-	| 'bypass'
-	| 'dont_ask'
-	| (string & {});
+	'default' | 'accept_edits' | 'explore' | 'bypass' | 'dont_ask' | (string & {});
 
 export type ScheduleSource = 'USER' | 'AGENT';
 
@@ -1034,7 +1024,10 @@ export interface ListKnowledgeBasesResponse {
 export interface CreateKnowledgeBaseRequest {
 	name: string;
 	description?: string;
-	embedding_model_config: EmbeddingModelConfig;
+	embedding_model_config: Omit<EmbeddingModelConfig, 'dimensions'> & {
+		/** New API gateways can detect this value when it is omitted. */
+		dimensions?: number;
+	};
 	chunker_config: ChunkerConfig;
 }
 
@@ -1062,12 +1055,7 @@ export interface UpdateKnowledgeBaseRequest {
  * - `error` — terminal failure; `error` field carries the reason.
  */
 export type KnowledgeDocumentStatus =
-	| 'pending'
-	| 'parsing'
-	| 'chunking'
-	| 'indexing'
-	| 'ready'
-	| 'error';
+	'pending' | 'parsing' | 'chunking' | 'indexing' | 'ready' | 'error';
 
 /**
  * Document view returned by `/knowledge_bases/{id}/documents` and
@@ -1192,6 +1180,7 @@ export interface DimensionPolicy {
 /** One credential and the embedding models it can serve, post-policy. */
 export interface KbEmbeddingProvider {
 	credential: CredentialView;
+	/** Gateway credentials may start with an empty catalogue and discover models on selection. */
 	models: EmbeddingModelCard[];
 }
 

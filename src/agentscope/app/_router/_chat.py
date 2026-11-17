@@ -20,6 +20,7 @@ Two trigger paths, deliberately asymmetric:
   the worker's still-finishing parked run (the old 409 race) — the
   dispatcher serialises them.
 """
+
 import asyncio
 import mimetypes
 from pathlib import Path
@@ -34,10 +35,13 @@ from fastapi import (
     status,
 )
 
+from ..storage import StorageBase
+from .._service._session_access import require_session
 from ..deps import (
     get_chat_run_registry,
     get_chat_service,
     get_current_user_id,
+    get_storage,
     get_knowledge_parsers,
     get_message_bus,
 )
@@ -200,8 +204,9 @@ def _format_attachment_text(
 )
 async def list_chat_attachment_content_types(
     _: str = Depends(get_current_user_id),
-    parsers: list[ParserBase]
-    | dict[str, ParserBase] = Depends(get_knowledge_parsers),
+    parsers: list[ParserBase] | dict[str, ParserBase] = Depends(
+        get_knowledge_parsers
+    ),
 ) -> ListChatAttachmentContentTypesResponse:
     """Advertise parser-backed document types for the chat picker."""
     media_routes, extension_routes = _build_attachment_parser_registry(
@@ -222,8 +227,9 @@ async def parse_chat_attachment(
     request: Request,
     file: UploadFile = File(description="Document to extract as text."),
     _: str = Depends(get_current_user_id),
-    parsers: list[ParserBase]
-    | dict[str, ParserBase] = Depends(get_knowledge_parsers),
+    parsers: list[ParserBase] | dict[str, ParserBase] = Depends(
+        get_knowledge_parsers
+    ),
 ) -> ParseChatAttachmentResponse:
     """Parse a document without embedding it or creating a knowledge base."""
     filename = file.filename or "uploaded_file"
@@ -307,6 +313,7 @@ async def chat(
     chat_service: ChatService = Depends(get_chat_service),
     chat_run_registry: ChatRunRegistry = Depends(get_chat_run_registry),
     message_bus: MessageBus = Depends(get_message_bus),
+    storage: StorageBase = Depends(get_storage),
 ) -> ChatTriggerResponse:
     """Trigger a chat run for the specified session.
 
@@ -360,6 +367,10 @@ async def chat(
     # collision (no 409) and the leader's run slot is never occupied by
     # the worker's resume.
     # ------------------------------------------------------------------
+    leader = await require_session(
+        storage, user_id, request.agent_id, request.session_id
+    )
+
     if isinstance(
         request.input,
         (UserConfirmResultEvent, ExternalExecutionResultEvent),
@@ -374,6 +385,20 @@ async def chat(
         if target is not None:
             run_session_id = target["worker_session_id"]
             run_agent_id = target["worker_agent_id"]
+            worker = await require_session(
+                storage, user_id, run_agent_id, run_session_id
+            )
+            team = (
+                await storage.get_team(user_id, leader.team_id)
+                if leader.team_id
+                else None
+            )
+            if (
+                team is None
+                or team.session_id != leader.id
+                or worker.team_id != team.id
+            ):
+                raise HTTPException(404, "Confirmation target not found.")
 
         await enqueue_run_trigger(
             message_bus,

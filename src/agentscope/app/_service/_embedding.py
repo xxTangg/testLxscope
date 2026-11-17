@@ -18,7 +18,7 @@ from fastapi import HTTPException, status
 
 from ._access import ResourceAccessService
 from ..storage import CredentialRecord, EmbeddingModelConfig
-from ...credential import CredentialFactory
+from ...credential import CredentialFactory, NewAPICredential
 from ...embedding import EmbeddingModelBase
 
 
@@ -49,6 +49,7 @@ def build_embedding_model(
         `HTTPException`:
             400 if the provider does not support embedding.
     """
+    ResourceAccessService.ensure_credential_enabled(credential_record)
     credential = CredentialFactory.from_dict(credential_record.data)
 
     credential_cls = CredentialFactory.get_credential_class(config.type)
@@ -70,7 +71,12 @@ def build_embedding_model(
 
     context_size: int | None = None
     pass_dimensions = True
-    for card in embedding_cls.list_models():
+    if isinstance(credential, NewAPICredential):
+        cards = []
+        pass_dimensions = False
+    else:
+        cards = embedding_cls.list_models()
+    for card in cards:
         if card.name == config.model:
             context_size = card.context_size
             pass_dimensions = card.pass_dimensions
@@ -93,7 +99,7 @@ def build_embedding_model(
     # ``pass_dimensions`` is currently an OpenAI-compatible client option;
     # keep it provider-specific so other embedding implementations do not
     # receive an unexpected constructor argument.
-    if config.type == "openai_credential":
+    if config.type in ("openai_credential", "newapi_credential"):
         kwargs["pass_dimensions"] = pass_dimensions
 
     return embedding_cls(**kwargs)

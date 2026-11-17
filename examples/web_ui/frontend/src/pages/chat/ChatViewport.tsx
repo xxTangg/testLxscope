@@ -63,6 +63,7 @@ import { useWorkspace } from '@/hooks/useWorkspace.ts';
 import { useWorkspaceStatus } from '@/hooks/useWorkspaceStatus';
 import { useTranslation } from '@/i18n/useI18n';
 import { formatApiErrorForAlert } from '@/lib/api-error';
+import { sessionDisplayName } from '@/utils/sessionTime';
 import { createUuid } from '@/utils/uuid';
 
 const REALTIME_EXCLUDED_ENUM_VALUES: Record<string, unknown[]> = {
@@ -225,7 +226,7 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 	);
 	const [selectedKnowledgeConfig, setSelectedKnowledgeConfig] =
 		useState<SessionKnowledgeConfig | null>(null);
-	const [selectedPermissionMode, setSelectedPermissionMode] = useState<string>('default');
+	const [selectedPermissionMode, setSelectedPermissionMode] = useState<string>('accept_edits');
 	const [credentialOpen, setCredentialOpen] = useState(false);
 	const [tasksContext, setTasksContext] = useState<TaskContext | null>(null);
 	const [permissionContext, setPermissionContext] = useState<PermissionContext | null>(null);
@@ -567,12 +568,12 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 		if (!selectedModel) return null;
 		const items = groups[selectedModel.type];
 		if (!items) return null;
-		for (const { models } of items) {
-			const card = models.find((m) => m.name === selectedModel.model);
-			if (card) return card;
-		}
-		return null;
-	}, [groups, selectedModel?.type, selectedModel?.model]);
+		return (
+			items
+				.find((entry) => entry.credential.id === selectedModel.credential_id)
+				?.models.find((model) => model.name === selectedModel.model) ?? null
+		);
+	}, [groups, selectedModel]);
 
 	const nativeAttachmentInputTypes = useMemo(
 		() => modelAttachmentInputTypes(selectedModelCard?.input_types ?? []),
@@ -674,21 +675,17 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 	 *   no credentials / models are configured.
 	 */
 	const getFirstAvailableModel = (): ChatModelConfig | null => {
-		const firstType = Object.keys(groups)[0];
-		if (!firstType) return null;
-		const items = groups[firstType];
-		if (!items || items.length === 0) return null;
-		const firstItem = items[0];
-		const firstModel = (firstItem.models as { name?: string; id?: string }[])[0];
-		if (!firstModel) return null;
-		const modelName = firstModel.name ?? firstModel.id ?? null;
-		if (!modelName) return null;
-		return {
-			type: firstType,
-			credential_id: firstItem.credential.id,
-			model: modelName,
-			parameters: {},
-		};
+		for (const [type, items] of Object.entries(groups)) {
+			const first = items.find((entry) => entry.models.length > 0);
+			if (first)
+				return {
+					type,
+					credential_id: first.credential.id,
+					model: first.models[0].name,
+					parameters: {},
+				};
+		}
+		return null;
 	};
 
 	// Seed tasks + permission from the session snapshot ONCE per
@@ -764,12 +761,12 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 
 	// Sync selectedPermissionMode when the session changes. Same
 	// loading-window guard as above — don't reset the displayed mode
-	// to "default" while the new session view is still on the wire.
+	// to the new-session default while the session view is still on the wire.
 	useEffect(() => {
 		if (!view) return;
 		const mode = (view.session.state?.permission_context as Record<string, unknown>)
 			?.mode as string;
-		setSelectedPermissionMode(mode ?? 'default');
+		setSelectedPermissionMode(mode ?? 'accept_edits');
 	}, [sessionId, view]);
 
 	/**
@@ -893,9 +890,11 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 									{msgs.length > 0 && (
 										<span
 											className="truncate px-2 text-sm text-muted-foreground"
-											title={view?.session.config.name}
+											title={
+												view ? sessionDisplayName(view.session) : undefined
+											}
 										>
-											{view?.session.config.name}
+											{view ? sessionDisplayName(view.session) : ''}
 										</span>
 									)}
 								</div>

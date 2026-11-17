@@ -277,7 +277,7 @@ export function ChannelDetailPanel({
 			<div className="px-5 pt-2 pb-5">
 				<Button
 					variant="ghost"
-					className="w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+					className="w-full text-destructive hover:bg-destructive-alpha-10 hover:text-destructive"
 					onClick={onDelete}
 				>
 					<Trash2 className="size-3.5" />

@@ -11,11 +11,11 @@ Events produced by the agent are not exposed back through this method
 that wants them subscribes through the
 ``GET /sessions/{sid}/stream`` SSE endpoint.
 """
+
 import asyncio
 import inspect
 import json
 import mimetypes
-import os
 import re
 from dataclasses import dataclass
 from typing import Literal, TYPE_CHECKING
@@ -61,6 +61,7 @@ from .._types import (
     EventProjector,
     SubAgentTemplate,
 )
+from ._session_access import require_session
 from ._access import ResourceAccessService
 from ._model import get_model
 from ._tts_model import get_tts_model
@@ -294,11 +295,9 @@ class ChatService:
 
         backend = workspace.get_backend()
         workdir = backend.abspath(
-            workspace.workdir,
+            workspace.file_root,
             cwd=workspace.workdir,
         )
-        root = workdir.replace("\\", "/").rstrip("/")
-        root_for_compare = root.casefold() if os.name == "nt" else root
         root_variants = sorted(
             {
                 workdir.rstrip("/\\"),
@@ -308,9 +307,9 @@ class ChatService:
             key=len,
             reverse=True,
         )
-        escaped_root = "(?:" + "|".join(
-            re.escape(value) for value in root_variants
-        ) + ")"
+        escaped_root = (
+            "(?:" + "|".join(re.escape(value) for value in root_variants) + ")"
+        )
         # Match any filename extension while stopping before sentence
         # punctuation. Paths may be wrapped in file://, Markdown, or code.
         path_pattern = re.compile(
@@ -353,16 +352,11 @@ class ChatService:
             for match in matches:
                 raw_path = match.group("path")
                 try:
-                    target = backend.abspath(raw_path, cwd=workspace.workdir)
-                    normalized_target = target.replace("\\", "/")
-                    if os.name == "nt":
-                        normalized_target = normalized_target.casefold()
-                    if not normalized_target.startswith(root_for_compare + "/"):
-                        continue
+                    target = await workspace.resolve_file_path(raw_path)
                     entry = await backend.stat(target)
                 except Exception as exc:  # pylint: disable=broad-except
                     logger.debug(
-                        "Could not resolve generated file %r in session %r: %s",
+                        "Could not resolve file %r in session %r: %s",
                         raw_path,
                         session_id,
                         exc,
@@ -373,7 +367,7 @@ class ChatService:
 
                 name = backend.basename(target) or "download"
                 found[target] = {
-                    "path": target,
+                    "path": workspace.virtual_file_path(target),
                     "reported_path": raw_path,
                     "name": name,
                     "media_type": mimetypes.guess_type(name)[0]
@@ -411,12 +405,14 @@ class ChatService:
         user_id: str,
         session_id: str,
         agent_id: str,
-        input_msg: Msg
-        | list[Msg]
-        | UserConfirmResultEvent
-        | ExternalExecutionResultEvent
-        | UserInterruptEvent
-        | None = None,
+        input_msg: (
+            Msg
+            | list[Msg]
+            | UserConfirmResultEvent
+            | ExternalExecutionResultEvent
+            | UserInterruptEvent
+            | None
+        ) = None,
         sop_dispatch: str | None = None,
     ) -> None:
         """Drive a chat run to completion.
@@ -613,18 +609,18 @@ class ChatService:
             finished_reason=ReplyFinishedReason.ERROR,
             error=_classify_error(error),
         )
+        logger.error(
+            "Reply failed for session %r (classified as %s).",
+            session_id,
+            end_event.error.type if end_event.error else "error",
+            exc_info=error,
+        )
         reply_msg.append_event(end_event)
-        entry_id = await publish_session_event(
+        return await publish_session_event(
             self._message_bus,
             session_id,
             end_event.model_dump(mode="json"),
         )
-        logger.exception(
-            "Reply failed for session %r; reported to the client as %s.",
-            session_id,
-            end_event.error.type if end_event.error else "error",
-        )
-        return entry_id
 
     async def _notify_leader_of_failure(
         self,
@@ -757,6 +753,12 @@ class ChatService:
                 Display name used in that notification. Defaults to
                 ``agent_id`` when the agent record never loaded.
         """
+        logger.error(
+            "Chat failed before a reply for session %r (agent %r).",
+            session_id,
+            agent_id,
+            exc_info=error,
+        )
         try:
             reply_id = _generate_id()
             start_event = ReplyStartEvent(
@@ -926,12 +928,14 @@ class ChatService:
         user_id: str,
         session_id: str,
         agent_id: str,
-        input_msg: Msg
-        | list[Msg]
-        | UserConfirmResultEvent
-        | ExternalExecutionResultEvent
-        | UserInterruptEvent
-        | None,
+        input_msg: (
+            Msg
+            | list[Msg]
+            | UserConfirmResultEvent
+            | ExternalExecutionResultEvent
+            | UserInterruptEvent
+            | None
+        ),
         sop_dispatch: str | None = None,
     ) -> None:
         """The actual chat-run body; wrapped by :meth:`run` for error
@@ -946,6 +950,8 @@ class ChatService:
         # The run to carry on after the lock, if this turn resumed a step.
         resumed_sop_run_id: str | None = None
         interrupted = False
+
+        await require_session(self._storage, user_id, agent_id, session_id)
 
         async with self._message_bus.acquire_lock(
             MessageBusKeys.session_lock(session_id),
@@ -1067,11 +1073,11 @@ class ChatService:
                     session_record.state.permission_context.working_directories
                 )
                 if workspace.workdir not in working_dirs:
-                    working_dirs[
-                        workspace.workdir
-                    ] = AdditionalWorkingDirectory(
-                        path=workspace.workdir,
-                        source="session",
+                    working_dirs[workspace.workdir] = (
+                        AdditionalWorkingDirectory(
+                            path=workspace.workdir,
+                            source="session",
+                        )
                     )
 
                 # -------------------------------------------------------------
@@ -1103,9 +1109,11 @@ class ChatService:
                 channel_tools = (
                     await channel.list_tools(
                         workspace,
-                        channel_origin.channel_user_id
-                        if chat_kind is ChatKind.PRIVATE
-                        else None,
+                        (
+                            channel_origin.channel_user_id
+                            if chat_kind is ChatKind.PRIVATE
+                            else None
+                        ),
                     )
                     if channel is not None and channel_origin is not None
                     else []
@@ -1539,10 +1547,12 @@ class ChatService:
                                         current.cancel()
 
                         if reply_msg is not None:
-                            artifact_cursor = await self._attach_workspace_artifacts(
-                                session_id=session_id,
-                                workspace=workspace,
-                                reply=reply_msg,
+                            artifact_cursor = (
+                                await self._attach_workspace_artifacts(
+                                    session_id=session_id,
+                                    workspace=workspace,
+                                    reply=reply_msg,
+                                )
                             )
                             if artifact_cursor is not None:
                                 checkpoint_cursor = artifact_cursor
@@ -1683,10 +1693,12 @@ class ChatService:
                                     team_ctx,
                                     worker_name,
                                     msg.finished_reason,
-                                    msg.error.message
-                                    if msg.error
-                                    else "The turn stopped before it "
-                                    "finished.",
+                                    (
+                                        msg.error.message
+                                        if msg.error
+                                        else "The turn stopped before it "
+                                        "finished."
+                                    ),
                                 )
 
                 persist_task = asyncio.create_task(_persist())

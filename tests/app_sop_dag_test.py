@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """DAG execution over real SQLite storage, without model or network calls."""
+
 import asyncio
 import tempfile
 from typing import Any
+from uuid import uuid4
 from pathlib import Path
 from types import SimpleNamespace
 from collections import Counter
@@ -52,9 +54,9 @@ def definition(human: bool = False) -> SOPData:
                     "description": f"do {key}",
                     "depends_on": parents,
                     "executor": {"agent_id": "agent", "session_key": "worker"},
-                    "verifier": {"type": "human"}
-                    if human and key == "c"
-                    else None,
+                    "verifier": (
+                        {"type": "human"} if human and key == "c" else None
+                    ),
                     "max_attempts": 1,
                     "retry_delay_seconds": 0,
                 }
@@ -124,6 +126,11 @@ class Chat:
         assert result.state is ToolResultState.SUCCESS, result
 
 
+class _WorkspaceIds:
+    async def new_workspace_id(self, *, user_id: str) -> str:
+        return f"{user_id}/sessions/{uuid4().hex}"
+
+
 class SOPDAGTest(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.stack = AsyncExitStack()
@@ -137,7 +144,7 @@ class SOPDAGTest(IsolatedAsyncioTestCase):
         self.chat = Chat(self.storage, self.bus)
         self.service = SOPService(
             self.storage,
-            None,
+            _WorkspaceIds(),
             self.bus,
             self.chat,
             SessionService(self.storage, self.bus),
@@ -217,7 +224,7 @@ class SOPDAGTest(IsolatedAsyncioTestCase):
         replacement = Chat(self.storage, self.bus)
         self.service = SOPService(
             self.storage,
-            None,
+            _WorkspaceIds(),
             self.bus,
             replacement,
             SessionService(self.storage, self.bus),
@@ -259,7 +266,7 @@ class SOPDAGTest(IsolatedAsyncioTestCase):
                 "user", run.id, 2, True, expected_attempt_id=token
             )
 
-    async def test_late_attempt_and_conflicting_duplicate_verdicts_are_rejected(
+    async def test_late_attempt_and_conflicting_verdicts_are_rejected(
         self,
     ) -> None:
         run = await self.create(definition(human=True))
@@ -289,7 +296,7 @@ class SOPDAGTest(IsolatedAsyncioTestCase):
         self.assertEqual((await tool(True)).state, ToolResultState.ERROR)
         await self.settle()
 
-    async def test_tool_resume_waits_for_session_checkpoint_before_human_review(
+    async def test_tool_resume_waits_for_checkpoint_before_review(
         self,
     ) -> None:
         from agentscope.app.message_bus import MessageBusKeys
@@ -424,7 +431,7 @@ class SOPDAGTest(IsolatedAsyncioTestCase):
         directory = self.stack.enter_context(tempfile.TemporaryDirectory())
         backend = LocalBackend()
 
-        class Workspaces:
+        class Workspaces(_WorkspaceIds):
             async def get_workspace(
                 self, user: Any, agent: Any, session: Any, workspace_id: Any
             ) -> SimpleNamespace:
@@ -517,7 +524,7 @@ class SOPDAGTest(IsolatedAsyncioTestCase):
 
 
 class SOPDAGRedisTest(SOPDAGTest):
-    """Run the same concurrency/recovery contracts against the deployed backend."""
+    """Run concurrency/recovery contracts against the deployed backend."""
 
     async def asyncSetUp(self) -> None:
         import fakeredis.aioredis
@@ -549,7 +556,7 @@ class SOPDAGRedisTest(SOPDAGTest):
         self.chat = Chat(self.storage, self.bus)
         self.service = SOPService(
             self.storage,
-            None,
+            _WorkspaceIds(),
             self.bus,
             self.chat,
             SessionService(self.storage, self.bus),
@@ -561,7 +568,7 @@ class SOPDAGRedisTest(SOPDAGTest):
         run = await self.create()
         other = SOPService(
             self.storage,
-            None,
+            _WorkspaceIds(),
             self.bus,
             self.chat,
             SessionService(self.storage, self.bus),

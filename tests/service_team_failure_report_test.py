@@ -11,7 +11,7 @@ import json
 from types import SimpleNamespace
 from typing import AsyncGenerator
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from utils import AnyString
 
@@ -307,6 +307,32 @@ class TeamFailureReportTest(IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_reply_error_is_logged_if_publishing_fails(self) -> None:
+        service = ChatService(
+            storage=self.storage,
+            workspace_manager=self.workspace_manager,
+            scheduler_manager=object(),
+            background_task_manager=object(),
+            message_bus=self.bus,
+            resource_access_service=object(),
+        )
+        reply = AssistantMsg(id="reply-1", name="worker", content=[])
+        with (
+            patch(
+                "agentscope.app._service._chat.publish_session_event",
+                new=AsyncMock(side_effect=RuntimeError("event bus down")),
+            ),
+            self.assertLogs("as", level="ERROR") as logs,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "event bus down"):
+                await service._close_failed_reply(
+                    self.worker_session.id,
+                    reply,
+                    ValueError("model stream failed"),
+                )
+        self.assertIn("Reply failed for session", logs.output[0])
+        self.assertIn("ValueError: model stream failed", logs.output[0])
+
     async def test_worker_interruption_reaches_the_leader(self) -> None:
         """An interrupted worker turn is reported too."""
         delivered = await self._run(
@@ -362,11 +388,17 @@ class TeamFailureReportTest(IsolatedAsyncioTestCase):
 
     async def test_assembly_failure_reaches_the_leader(self) -> None:
         """A worker that never assembled is reported as well."""
-        delivered = await self._run(
-            self.worker_session,
-            self.worker_agent.id,
-            [],
-            model_fails=True,
+        with self.assertLogs("as", level="ERROR") as logs:
+            delivered = await self._run(
+                self.worker_session,
+                self.worker_agent.id,
+                [],
+                model_fails=True,
+            )
+        self.assertIn("Chat failed before a reply", logs.output[0])
+        self.assertIn(
+            "RuntimeError: no credential for the worker",
+            logs.output[0],
         )
         self.assertEqual(len(delivered), 1)
         self.assertDictEqual(

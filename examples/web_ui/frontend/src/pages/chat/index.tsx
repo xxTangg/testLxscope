@@ -1,4 +1,3 @@
-import { format, isToday } from 'date-fns';
 import {
 	BotMessageSquare,
 	Cable,
@@ -12,8 +11,9 @@ import {
 	Trash2,
 	Users,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { toast } from 'sonner';
 
 import { ChatViewport } from './ChatViewport';
 import type { SessionRecord, SessionSourceKind } from '@/api';
@@ -55,6 +55,7 @@ import { AudioProvider } from '@/context/AudioContext';
 import { useAgents } from '@/hooks/useAgents';
 import { useSessions } from '@/hooks/useSessions';
 import { useTranslation } from '@/i18n/useI18n.ts';
+import { formatSessionTime, isSessionToday, sessionDisplayName } from '@/utils/sessionTime';
 
 /**
  * The chat page's outer shell. Responsibilities split cleanly:
@@ -91,6 +92,22 @@ const LAST_SESSION_KEY = 'chat_last_session';
 
 const ChatPageInner = () => {
 	const navigate = useNavigate();
+	const location = useLocation();
+	const afterAuthentication = Boolean(
+		(location.state as { afterAuthentication?: boolean } | null)?.afterAuthentication,
+	);
+	const [now, setNow] = useState(() => new Date());
+
+	useEffect(() => {
+		// Regroup sessions after Beijing midnight, including tabs reopened later.
+		const refreshDate = () => setNow(new Date());
+		const timer = window.setInterval(refreshDate, 60_000);
+		document.addEventListener('visibilitychange', refreshDate);
+		return () => {
+			window.clearInterval(timer);
+			document.removeEventListener('visibilitychange', refreshDate);
+		};
+	}, []);
 	const {
 		agentId: urlAgentId,
 		sessionId: urlSessionId,
@@ -101,16 +118,30 @@ const ChatPageInner = () => {
 		memberId?: string;
 	}>();
 	const { t } = useTranslation();
-	const { agents, refetch: refetchAgents, remove: removeAgent } = useAgents();
+	const {
+		agents,
+		loading: agentsLoading,
+		error: agentsError,
+		refetch: refetchAgents,
+		remove: removeAgent,
+	} = useAgents();
+	const selectedAgent = agents.find((a) => a.id === urlAgentId) ?? null;
+	const selectedAgentId = selectedAgent?.id ?? null;
 	const {
 		sessions,
+		loading: sessionsLoading,
+		error: sessionsError,
 		refetch: refetchSessions,
 		create: createSession,
 		update: updateSession,
 		remove: removeSession,
-	} = useSessions(urlAgentId ?? null);
+	} = useSessions(selectedAgentId);
 
 	const { isMobile, setOpen, setOpenMobile } = useSidebar();
+	const ensureSidebarOpen = useCallback(() => {
+		setOpen(true);
+		setOpenMobile(true);
+	}, [setOpen, setOpenMobile]);
 	const [editOpen, setEditOpen] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [renameOpen, setRenameOpen] = useState(false);
@@ -118,8 +149,8 @@ const ChatPageInner = () => {
 	const [deleteSessionOpen, setDeleteSessionOpen] = useState(false);
 	const [sessionToDelete, setSessionToDelete] = useState<SessionRecord | null>(null);
 
-	const selectedAgent = agents.find((a) => a.id === urlAgentId) ?? null;
 	const currentView = sessions.find((v) => v.session.id === urlSessionId) ?? null;
+	const selectedSessionId = currentView?.session.id ?? null;
 	// Show a per-origin icon only when sessions actually mix sources —
 	// a uniform list needs no disambiguation.
 	const showSourceIcons = new Set(sessions.map((v) => v.session.origin.type)).size > 1;
@@ -134,47 +165,66 @@ const ChatPageInner = () => {
 		? (currentView?.team?.members.find((m) => m.agent.id === urlMemberId) ?? null)
 		: null;
 	const effectiveAgentId =
-		focusedMember && focusedMember.session_id ? focusedMember.agent.id : (urlAgentId ?? null);
+		focusedMember && focusedMember.session_id ? focusedMember.agent.id : selectedAgentId;
 	const effectiveSessionId =
-		focusedMember && focusedMember.session_id
-			? focusedMember.session_id
-			: currentView
-				? (urlSessionId ?? null)
-				: null;
+		focusedMember && focusedMember.session_id ? focusedMember.session_id : selectedSessionId;
 
 	// Remember where the user was, so coming back to a bare `/chat` —
 	// from another page, or from a new tab — reopens it instead of
 	// making them pick the same pair again.
 	useEffect(() => {
-		if (!urlAgentId || !urlSessionId) return;
-		localStorage.setItem(LAST_AGENT_KEY, urlAgentId);
-		localStorage.setItem(LAST_SESSION_KEY, urlSessionId);
-	}, [urlAgentId, urlSessionId]);
+		if (!selectedAgentId || !selectedSessionId) return;
+		localStorage.setItem(LAST_AGENT_KEY, selectedAgentId);
+		localStorage.setItem(LAST_SESSION_KEY, selectedSessionId);
+	}, [selectedAgentId, selectedSessionId]);
 
-	// Redirect: URL is missing an agent → reopen the last one viewed,
-	// falling back to the first, and rewrite the URL in-place (replace
-	// so we don't pollute history).
+	// Validate URL and saved selections against this account's visible list
+	// before any session or workspace request can use them.
 	useEffect(() => {
-		if (urlAgentId || agents.length === 0) return;
+		if (agentsLoading || agentsError) return;
 		const remembered = localStorage.getItem(LAST_AGENT_KEY);
-		const agent = agents.find((a) => a.id === remembered) ?? agents[0];
-		navigate(`/chat/${agent.id}`, { replace: true });
-	}, [agents, urlAgentId, navigate]);
+		const rememberedAgent = agents.find((a) => a.id === remembered);
+		if (remembered && !rememberedAgent) {
+			localStorage.removeItem(LAST_AGENT_KEY);
+			localStorage.removeItem(LAST_SESSION_KEY);
+		}
+		if (selectedAgentId) return;
+		const agent = rememberedAgent ?? agents[0];
+		if (urlAgentId && !afterAuthentication) {
+			toast.info(t('chat.agentUnavailable'), { id: 'chat-agent-unavailable' });
+		}
+		if (urlAgentId || agent) {
+			navigate(agent ? `/chat/${agent.id}` : '/chat', { replace: true });
+		}
+	}, [
+		agents,
+		agentsLoading,
+		agentsError,
+		selectedAgentId,
+		urlAgentId,
+		afterAuthentication,
+		navigate,
+		t,
+	]);
 
 	// Redirect: URL has an agent but no session, or its sessionId no
 	// longer exists for this agent → reopen the last session viewed
 	// under *this* agent, falling back to the first available one.
 	useEffect(() => {
-		if (!urlAgentId || sessions.length === 0) return;
+		if (!selectedAgentId || sessionsLoading || sessionsError) return;
+		if (sessions.length === 0) {
+			if (urlSessionId) navigate(`/chat/${selectedAgentId}`, { replace: true });
+			return;
+		}
 		const matches = urlSessionId && sessions.some((v) => v.session.id === urlSessionId);
 		if (matches) return;
 		const remembered =
-			localStorage.getItem(LAST_AGENT_KEY) === urlAgentId
+			localStorage.getItem(LAST_AGENT_KEY) === selectedAgentId
 				? localStorage.getItem(LAST_SESSION_KEY)
 				: null;
 		const view = sessions.find((v) => v.session.id === remembered) ?? sessions[0];
-		navigate(`/chat/${urlAgentId}/${view.session.id}`, { replace: true });
-	}, [urlAgentId, urlSessionId, sessions, navigate]);
+		navigate(`/chat/${selectedAgentId}/${view.session.id}`, { replace: true });
+	}, [selectedAgentId, urlSessionId, sessions, sessionsLoading, sessionsError, navigate]);
 
 	/**
 	 * Create a new session under the currently selected agent and
@@ -187,10 +237,10 @@ const ChatPageInner = () => {
 	 * to the freshly created session.
 	 */
 	const handleCreateSession = async () => {
-		if (!urlAgentId) return;
+		if (!selectedAgentId) return;
 		const seedConfig = currentView?.session.config ?? sessions[0]?.session.config;
 		const res = await createSession({
-			agent_id: urlAgentId,
+			agent_id: selectedAgentId,
 			...(seedConfig?.chat_model_config
 				? { chat_model_config: seedConfig.chat_model_config }
 				: {}),
@@ -201,7 +251,7 @@ const ChatPageInner = () => {
 				? { realtime_model_config: seedConfig.realtime_model_config }
 				: {}),
 		});
-		navigate(`/chat/${urlAgentId}/${res.session_id}`);
+		navigate(`/chat/${selectedAgentId}/${res.session_id}`);
 	};
 
 	const handleAgentDeleted = async () => {
@@ -229,8 +279,10 @@ const ChatPageInner = () => {
 		await updateSession(renameSession.id, { name });
 	};
 
-	const todaySessions = sessions.filter((sess) => isToday(new Date(sess.session.created_at)));
-	const earlierSessions = sessions.filter((sess) => !isToday(new Date(sess.session.created_at)));
+	const todaySessions = sessions.filter((sess) => isSessionToday(sess.session.created_at, now));
+	const earlierSessions = sessions.filter(
+		(sess) => !isSessionToday(sess.session.created_at, now),
+	);
 
 	return (
 		<div className="flex h-full w-full p-2 gap-2">
@@ -258,11 +310,11 @@ const ChatPageInner = () => {
 								</Button>
 							</AgentDialog>
 						</SidebarGroupLabel>
-						<SidebarGroupContent className="flex items-center">
+						<SidebarGroupContent id="tour-agent-select" className="flex items-center">
 							<AgentSelect
 								className="flex-1 min-w-0"
 								agents={agents}
-								value={urlAgentId ?? null}
+								value={selectedAgentId}
 								onChange={(id) => navigate(`/chat/${id}`)}
 								variant="ghost"
 								size="default"
@@ -297,7 +349,10 @@ const ChatPageInner = () => {
 						</SidebarGroupContent>
 					</SidebarGroup>
 					<SidebarGroup className="mt-5 min-h-0 flex-1 px-2 py-0">
-						<SidebarGroupLabel className="justify-between">
+						<SidebarGroupLabel
+							className="justify-between"
+							title="Asia/Shanghai (UTC+08:00)"
+						>
 							{t('chat.session.label')}
 							<span className="text-[10px] text-text-data font-mono">
 								{sessions.length}
@@ -306,7 +361,11 @@ const ChatPageInner = () => {
 						<SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
 							<SidebarGroup>
 								<SidebarMenu className="mb-2">
-									<Button id="tour-create-session" onClick={handleCreateSession}>
+									<Button
+										id="tour-create-session"
+										onClick={handleCreateSession}
+										disabled={!selectedAgentId || sessionsLoading}
+									>
 										<Plus />
 										{t('chat.newSession')}
 									</Button>
@@ -322,7 +381,7 @@ const ChatPageInner = () => {
 											</EmptyMedia>
 											<EmptyTitle>{t('chat.session.emptyTitle')}</EmptyTitle>
 											<EmptyDescription>
-												{urlAgentId
+												{selectedAgentId
 													? t('chat.session.emptyHasAgent')
 													: t('chat.session.emptyNoAgent')}
 											</EmptyDescription>
@@ -361,20 +420,22 @@ const ChatPageInner = () => {
 																		<SourceIcon />
 																	)}
 																	<span className="truncate">
-																		{session.config.name ||
-																			session.id}
+																		{sessionDisplayName(
+																			session,
+																		)}
 																	</span>
 																</SidebarMenuButton>
 																{/* Badge and action are mutually exclusive.
 															    Keyboard focus reveals the action, plain
 															    focus-within does not — otherwise clicking
 															    the row would pin it open. */}
-																<SidebarMenuBadge className="max-md:hidden group-hover/menu-item:hidden group-has-focus-visible/menu-item:hidden group-has-data-[state=open]/menu-item:hidden text-text-tertiary! font-mono">
-																	{format(
-																		new Date(
-																			view.session.created_at,
-																		),
-																		'HH:mm',
+																<SidebarMenuBadge
+																	className="max-md:hidden group-hover/menu-item:hidden group-has-focus-visible/menu-item:hidden group-has-data-[state=open]/menu-item:hidden text-text-tertiary! font-mono"
+																	title={`${formatSessionTime(session.created_at)} (UTC+08:00)`}
+																>
+																	{formatSessionTime(
+																		session.created_at,
+																		'time',
 																	)}
 																</SidebarMenuBadge>
 																<DropdownMenu>
@@ -451,17 +512,19 @@ const ChatPageInner = () => {
 																		<SourceIcon />
 																	)}
 																	<span className="truncate">
-																		{session.config.name ||
-																			session.id}
+																		{sessionDisplayName(
+																			session,
+																		)}
 																	</span>
 																</SidebarMenuButton>
-																<SidebarMenuBadge className="max-md:hidden group-hover/menu-item:hidden group-has-focus-visible/menu-item:hidden group-has-data-[state=open]/menu-item:hidden text-text-tertiary! font-mono">
-																	{format(
-																		new Date(
-																			view.session.created_at,
-																		),
-																		'MMM dd',
-																	)}
+																<SidebarMenuBadge
+																	className="max-md:hidden group-hover/menu-item:hidden group-has-focus-visible/menu-item:hidden group-has-data-[state=open]/menu-item:hidden text-text-tertiary! font-mono"
+																	title={`${formatSessionTime(session.created_at)} (UTC+08:00)`}
+																>
+																	{formatSessionTime(
+																		session.created_at,
+																		'date',
+																	).slice(5)}
 																</SidebarMenuBadge>
 																<DropdownMenu>
 																	<DropdownMenuTrigger asChild>
@@ -549,7 +612,7 @@ const ChatPageInner = () => {
 			<RenameSessionDialog
 				open={renameOpen}
 				onOpenChange={setRenameOpen}
-				currentName={renameSession?.config.name ?? renameSession?.id ?? ''}
+				currentName={renameSession ? sessionDisplayName(renameSession) : ''}
 				onConfirm={handleRenameConfirm}
 			/>
 			<DeleteDialog
@@ -558,7 +621,7 @@ const ChatPageInner = () => {
 				title={t('common.deleteTitle', {
 					entity: t('dialog-session-delete.entity'),
 					name: (() => {
-						const raw = sessionToDelete?.config.name || sessionToDelete?.id || '';
+						const raw = sessionToDelete ? sessionDisplayName(sessionToDelete) : '';
 						return raw.length > 30 ? `${raw.slice(0, 30)}…` : raw;
 					})(),
 				})}
@@ -571,12 +634,15 @@ const ChatPageInner = () => {
 				}}
 			/>
 			<ChatTourController
-				agentsCount={agents.length}
+				ready={
+					!!selectedAgentId &&
+					!agentsLoading &&
+					!agentsError &&
+					!sessionsLoading &&
+					!sessionsError
+				}
 				sessionsCount={sessions.length}
-				onEnsureSidebarOpen={() => {
-					setOpen(true);
-					setOpenMobile(true);
-				}}
+				onEnsureSidebarOpen={ensureSidebarOpen}
 			/>
 		</div>
 	);

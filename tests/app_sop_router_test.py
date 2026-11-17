@@ -4,6 +4,7 @@
 No model is ever called: every run here stops at a step a person has to
 judge, which is exactly the path the endpoints exist to serve.
 """
+
 import tempfile
 from typing import Any
 from unittest import IsolatedAsyncioTestCase
@@ -239,6 +240,17 @@ class SOPRouterTest(IsolatedAsyncioTestCase):
         self.assertEqual(started.status_code, 201)
         run = started.json()
         self.assertEqual(list(run["sessions"]), ["modeller"])
+        directory = self._client.get(
+            "/workspace/directories",
+            headers=HEADERS,
+            params={
+                "agent_id": self._agent_id,
+                "session_id": run["sessions"]["modeller"],
+            },
+        )
+        self.assertEqual(directory.status_code, 200, directory.text)
+        self.assertTrue(directory.json()["path"].startswith("~/sessions/"))
+
         self.assertEqual(run["sop_id"], sop_id)
 
         listed = self._client.get(

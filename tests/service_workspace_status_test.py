@@ -11,6 +11,8 @@ common case, not an error. Every one of those paths is asserted to yield
 Dependencies are injected by calling the endpoint coroutine directly, so
 no app, no git binary and no real filesystem are involved.
 """
+
+import posixpath
 from typing import Any
 from unittest import IsolatedAsyncioTestCase
 
@@ -27,7 +29,8 @@ from agentscope.app.storage import (
     UserOrigin,
 )
 from agentscope.state import AgentState
-from agentscope.tool import ExecResult
+from agentscope.tool import ExecResult, BackendBase, DirEntry
+from agentscope.workspace import LocalWorkspace
 
 _STATUS_STDOUT = (
     b"# branch.oid abc123\0"
@@ -40,7 +43,7 @@ _STATUS_STDOUT = (
 _SHORTSTAT_STDOUT = b" 1 file changed, 15 insertions(+), 20 deletions(-)\n"
 
 
-class _FakeBackend:
+class _FakeBackend(BackendBase):
     """Answers the two git invocations from a canned script."""
 
     def __init__(self, *results: Any) -> None:
@@ -49,11 +52,17 @@ class _FakeBackend:
         self._results = list(results)
         self.calls: list[tuple[list[str], str | None]] = []
 
-    def abspath(self, path: str, *, cwd: str) -> str:
-        """Resolve like posixpath, which is what the real backends use."""
-        if path.startswith("/"):
-            return path
-        return f"{cwd}/{path}".rstrip("/") if path else cwd
+    async def realpath(self, path: str) -> str:
+        return posixpath.normpath(path)
+
+    async def stat(self, path: str) -> DirEntry:
+        return DirEntry(name=posixpath.basename(path), is_dir=True)
+
+    async def read_file(self, path: str) -> bytes:
+        raise NotImplementedError
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        raise NotImplementedError
 
     async def exec_shell(
         self,
@@ -71,9 +80,10 @@ class _FakeBackend:
         return outcome
 
 
-class _FakeWorkspace:
+class _FakeWorkspace(LocalWorkspace):
     def __init__(self, backend: _FakeBackend) -> None:
-        self.workdir = "/workspace"
+        super().__init__(workdir="/workspace")
+        self.workdir = self._file_root = "/workspace"
         self._backend = backend
 
     def get_backend(self) -> _FakeBackend:
@@ -166,8 +176,8 @@ class WorkspaceStatusTest(IsolatedAsyncioTestCase):
             ExecResult(exit_code=0, stdout=_SHORTSTAT_STDOUT, stderr=b""),
         )
 
-        self.assertEqual(result.workdir, "/workspace")
-        self.assertEqual(result.cwd, "/workspace")
+        self.assertEqual(result.workdir, "~")
+        self.assertEqual(result.cwd, "~")
         self.assertIsNotNone(result.git)
         self.assertEqual(result.git.branch, "main")
         self.assertEqual(result.git.ahead, 2)
@@ -189,21 +199,17 @@ class WorkspaceStatusTest(IsolatedAsyncioTestCase):
             cwd="sub/project",
         )
 
-        self.assertEqual(result.cwd, "/workspace/sub/project")
+        self.assertEqual(result.cwd, "~/sub/project")
         self.assertEqual(
             [call_cwd for _, call_cwd in self.backend.calls],
             ["/workspace/sub/project", "/workspace/sub/project"],
         )
 
-    async def test_absolute_cwd_is_used_verbatim(self) -> None:
-        """A cwd outside the workspace root is honoured, not clamped."""
-        result = await self._call(
-            ExecResult(exit_code=0, stdout=_STATUS_STDOUT, stderr=b""),
-            ExecResult(exit_code=0, stdout=_SHORTSTAT_STDOUT, stderr=b""),
-            cwd="/elsewhere/repo",
-        )
-
-        self.assertEqual(result.cwd, "/elsewhere/repo")
+    async def test_absolute_cwd_outside_space_is_rejected(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            await self._call(cwd="/elsewhere/repo")
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(self.backend.calls, [])
 
     async def test_not_a_repository(self) -> None:
         """Exit 128 is the ordinary "no repo here" answer."""
@@ -216,7 +222,7 @@ class WorkspaceStatusTest(IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(result.git)
-        self.assertEqual(result.workdir, "/workspace")
+        self.assertEqual(result.workdir, "~")
 
     async def test_git_binary_missing(self) -> None:
         """Exit 127 covers both a missing binary and a bad cwd."""
@@ -243,7 +249,7 @@ class WorkspaceStatusTest(IsolatedAsyncioTestCase):
         result = await self._call(RuntimeError("container is gone"))
 
         self.assertIsNone(result.git)
-        self.assertEqual(result.cwd, "/workspace")
+        self.assertEqual(result.cwd, "~")
 
     async def test_shortstat_failure_keeps_the_branch(self) -> None:
         """An unborn HEAD breaks ``diff`` but not ``status``.

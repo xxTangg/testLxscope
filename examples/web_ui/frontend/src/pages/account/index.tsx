@@ -35,9 +35,9 @@ const toDateKey = (date: Date) => {
 const activityColor = (tokens: number, maximum: number) => {
 	if (tokens === 0) return 'bg-muted/60';
 	const ratio = tokens / maximum;
-	if (ratio <= 0.25) return 'bg-primary/20';
-	if (ratio <= 0.5) return 'bg-primary/40';
-	if (ratio <= 0.75) return 'bg-primary/60';
+	if (ratio <= 0.25) return 'bg-primary-alpha-20';
+	if (ratio <= 0.5) return 'bg-primary-alpha-40';
+	if (ratio <= 0.75) return 'bg-primary-alpha-60';
 	return 'bg-primary';
 };
 
@@ -51,8 +51,8 @@ export function AccountPage() {
 		enabled: !!user,
 	});
 
-	const leaveAccount = async () => {
-		await logout();
+	const leaveAccount = () => {
+		logout();
 		navigate('/login', { replace: true });
 	};
 
@@ -139,11 +139,11 @@ export function AccountPage() {
 						</div>
 						<Separator />
 						<div className="flex flex-wrap gap-2">
-							<Button variant="outline" onClick={() => void leaveAccount()}>
+							<Button variant="outline" onClick={leaveAccount}>
 								<Repeat2 />
 								{t('auth.switchAccount')}
 							</Button>
-							<Button variant="outline" onClick={() => void leaveAccount()}>
+							<Button variant="outline" onClick={leaveAccount}>
 								<LogOut />
 								{t('auth.logout')}
 							</Button>

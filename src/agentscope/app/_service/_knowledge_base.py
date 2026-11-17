@@ -31,10 +31,12 @@ from ..rag.knowledge_base_manager import (
 )
 from ..storage import (
     ChunkerConfig,
+    EmbeddingModelConfig,
     KnowledgeDocumentData,
     KnowledgeDocumentRecord,
 )
 from ..._logging import logger
+from ._newapi import get_owned_newapi_gateway
 from ...rag import ApproxTokenChunker, Chunk
 from .._bus_ops import enqueue_index_task
 from ._access import (
@@ -48,7 +50,6 @@ if TYPE_CHECKING:
     from ..rag.knowledge_base_manager import KnowledgeBaseManagerBase
     from ..message_bus import MessageBus
     from ..storage import (
-        EmbeddingModelConfig,
         KnowledgeBaseRecord,
         StorageBase,
     )
@@ -151,6 +152,34 @@ class KnowledgeBaseService:
                 ``422`` when the chunker type or parameters are
                 invalid.
         """
+        if embedding_model_config.type == "newapi_credential":
+            gateway = await get_owned_newapi_gateway(
+                user_id,
+                embedding_model_config.credential_id,
+                self._storage,
+            )
+            if embedding_model_config.dimensions is None:
+                embedding_model_config = embedding_model_config.model_copy(
+                    update={
+                        "dimensions": await gateway.embedding_dimensions(
+                            embedding_model_config.model,
+                        ),
+                    },
+                )
+            policy = await self._manager.get_dimension_policy()
+            if not policy.accepts(embedding_model_config.dimensions):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The embedding dimension is incompatible with this knowledge base.",
+                )
+        if embedding_model_config.dimensions is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Select an embedding dimension for this provider.",
+            )
+        embedding_model_config = EmbeddingModelConfig.model_validate(
+            embedding_model_config.model_dump(),
+        )
         if chunker_config is None:
             chunker_config = ChunkerConfig(
                 type=next(iter(self._chunkers_by_type)),

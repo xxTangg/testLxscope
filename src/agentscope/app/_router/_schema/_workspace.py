@@ -1,14 +1,9 @@
 # -*- coding: utf-8 -*-
 """Schemas for equipping a workspace with MCPs and skills."""
+
 from pydantic import BaseModel, Field
 
 from ....mcp import MCPClient
-
-
-class AddSkillRequest(BaseModel):
-    """The request to add skill."""
-
-    skill_path: str
 
 
 class AddFromLibraryRequest(BaseModel):
@@ -54,6 +49,9 @@ class DirectoryEntry(BaseModel):
     name: str = Field(
         description="The entry name, without any leading directory.",
     )
+    display_name: str = Field(
+        description="Human-readable label; name remains the path component."
+    )
     is_dir: bool = Field(
         description="Whether the entry is itself a directory.",
     )
@@ -73,14 +71,9 @@ class DirectoryEntry(BaseModel):
 class DirectoryListing(BaseModel):
     """One directory level, plus the path it actually resolved to."""
 
-    path: str = Field(
-        description=(
-            "Absolute path of the directory that was listed. Echoing "
-            "it back is what lets a caller that passed a relative path "
-            "(or none at all) show the user where they really are — "
-            "the workspace root is backend-dependent and otherwise "
-            "unknowable client-side."
-        ),
+    path: str = Field(description="Logical personal-space path, rooted at ~.")
+    parent_path: str | None = Field(
+        description="Authorized parent path; null at the personal root."
     )
     entries: list[DirectoryEntry] = Field(
         description="The directory's immediate children, unsorted.",
@@ -91,11 +84,7 @@ class DownloadTokenResponse(BaseModel):
     """A capability authorizing one download of one path."""
 
     token: str = Field(
-        description=(
-            "Pass as the ``token`` query parameter of "
-            "``GET /workspace/files``, in place of the ``X-User-ID`` "
-            "header. Valid for this path only."
-        ),
+        description="Capability bound to user, Agent, session and file."
     )
     expires_at: float = Field(
         description="Unix timestamp after which the token is refused.",

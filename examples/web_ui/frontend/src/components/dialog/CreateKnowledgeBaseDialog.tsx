@@ -1,20 +1,13 @@
 import { CircleAlert, Info, Loader2, PlusCircle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import type {
-	ChunkerConfig,
-	ChunkerInfo,
-	EmbeddingModelCard,
-	EmbeddingModelConfig,
-	JSONSchema,
-} from '@/api';
+import type { ChunkerConfig, ChunkerInfo, EmbeddingModelConfig, JSONSchema } from '@/api';
 import {
 	type SchemaFormValue,
 	SchemaForm,
 	defaultValuesFromSchema,
 } from '@/components/form/SchemaForm';
 import { ChunkerSelect } from '@/components/select/ChunkerSelect';
-import { DimensionSelect } from '@/components/select/DimensionSelect';
 import { EmbeddingSelect } from '@/components/select/EmbeddingSelect';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert.tsx';
 import { Button } from '@/components/ui/button.tsx';
@@ -51,13 +44,6 @@ const NO_SKIP = new Set<string>();
 /** Same control width for every label-left field, as in the schedule dialog. */
 const HORIZONTAL_FIELD_WIDTH = '[&>[data-orientation=horizontal]>:last-child]:w-48';
 
-interface SelectedEmbedding {
-	type: string;
-	credentialId: string;
-	model: string;
-	card: EmbeddingModelCard;
-}
-
 export function CreateKnowledgeBaseDialog({
 	open,
 	onOpenChange,
@@ -67,17 +53,25 @@ export function CreateKnowledgeBaseDialog({
 }: Props) {
 	const { t } = useTranslation();
 	const { create } = useKnowledgeBases();
-	const { providers, policy, loading } = useKbEmbeddingModels(credentialRefetchTrigger);
+	const {
+		providers,
+		policy,
+		loading,
+		refetch: refetchModels,
+	} = useKbEmbeddingModels(credentialRefetchTrigger);
 	const { chunkers } = useChunkers();
 
 	const [name, setName] = useState('');
 	const [description, setDescription] = useState('');
-	const [selected, setSelected] = useState<SelectedEmbedding | null>(null);
-	const [dimension, setDimension] = useState<number | null>(null);
+	const [embeddingConfig, setEmbeddingConfig] = useState<EmbeddingModelConfig | null>(null);
 	const [selectedChunkerType, setSelectedChunkerType] = useState<string>('');
 	const [chunkerParams, setChunkerParams] = useState<Record<string, SchemaFormValue>>({});
 	const [submitting, setSubmitting] = useState(false);
 	const [errorKey, setErrorKey] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (open) void refetchModels();
+	}, [open, refetchModels]);
 
 	const selectedChunker = useMemo<ChunkerInfo | null>(
 		() => chunkers.find((c) => c.type === selectedChunkerType) ?? null,
@@ -116,8 +110,7 @@ export function CreateKnowledgeBaseDialog({
 		if (!open) {
 			setName('');
 			setDescription('');
-			setSelected(null);
-			setDimension(null);
+			setEmbeddingConfig(null);
 			setSelectedChunkerType('');
 			setChunkerParams({});
 			setErrorKey(null);
@@ -125,35 +118,13 @@ export function CreateKnowledgeBaseDialog({
 		}
 	}, [open]);
 
-	const dimensionOptions = useMemo<number[] | null>(() => {
-		if (!selected) return null;
-		const sd = selected.card.supported_dimensions;
-		return sd && sd.length > 0 ? sd : [selected.card.dimensions];
-	}, [selected]);
-
-	const handleSelectEmbedding = (sel: SelectedEmbedding) => {
-		setSelected(sel);
-		const sd = sel.card.supported_dimensions;
-		const defaultDim =
-			sd && sd.length > 0
-				? sd.includes(sel.card.dimensions)
-					? sel.card.dimensions
-					: sd[0]
-				: sel.card.dimensions;
-		setDimension(defaultDim);
-	};
-
 	const handleSubmit = async () => {
 		if (!name.trim()) {
 			setErrorKey('dialog-knowledge-base-create.errors.nameRequired');
 			return;
 		}
-		if (!selected) {
+		if (!embeddingConfig) {
 			setErrorKey('dialog-knowledge-base-create.errors.embeddingRequired');
-			return;
-		}
-		if (dimension == null || dimension <= 0) {
-			setErrorKey('dialog-knowledge-base-create.errors.dimensionRequired');
 			return;
 		}
 		if (!selectedChunkerType) {
@@ -163,13 +134,6 @@ export function CreateKnowledgeBaseDialog({
 		setErrorKey(null);
 		setSubmitting(true);
 		try {
-			const config: EmbeddingModelConfig = {
-				type: selected.type,
-				credential_id: selected.credentialId,
-				model: selected.model,
-				dimensions: dimension,
-				parameters: {},
-			};
 			const params: Record<string, unknown> = {};
 			for (const [k, v] of Object.entries(chunkerParams)) {
 				if (v !== undefined && v !== null && v !== '') params[k] = v;
@@ -181,11 +145,13 @@ export function CreateKnowledgeBaseDialog({
 			const knowledgeBaseId = await create({
 				name: name.trim(),
 				description: description.trim(),
-				embedding_model_config: config,
+				embedding_model_config: embeddingConfig,
 				chunker_config: chunkerConfig,
 			});
 			onCreated?.(knowledgeBaseId);
 			onOpenChange(false);
+		} catch {
+			// The API client displays the error while the form stays open.
 		} finally {
 			setSubmitting(false);
 		}
@@ -196,7 +162,7 @@ export function CreateKnowledgeBaseDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="!w-[500px] !max-w-[500px] flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
+			<DialogContent className="sm:max-w-[500px] flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden supports-[height:100dvh]:max-h-[calc(100dvh-2rem)]">
 				<DialogHeader className="shrink-0">
 					<DialogTitle>{t('dialog-knowledge-base-create.title')}</DialogTitle>
 					<DialogDescription>
@@ -264,35 +230,17 @@ export function CreateKnowledgeBaseDialog({
 
 						<Separator />
 
-						<Field orientation="horizontal">
-							<FieldLabel>
-								{t('dialog-knowledge-base-create.embeddingModel.label')}
-							</FieldLabel>
+						{open && (
 							<EmbeddingSelect
-								value={
-									selected
-										? {
-												type: selected.type,
-												credential_id: selected.credentialId,
-												model: selected.model,
-											}
-										: null
-								}
+								value={embeddingConfig}
 								providers={providers}
+								policy={policy}
 								loading={loading}
-								onChange={handleSelectEmbedding}
+								disabled={submitting}
+								onChange={setEmbeddingConfig}
 								onAddCredential={onAddCredential}
 							/>
-						</Field>
-						<Field orientation="horizontal">
-							<FieldLabel>{t('dialog-knowledge-base-create.dimension.label')}</FieldLabel>
-							<DimensionSelect
-								value={dimension}
-								options={dimensionOptions}
-								onChange={setDimension}
-								disabled={submitting}
-							/>
-						</Field>
+						)}
 
 						{chunkers.length > 0 && (
 							<>
@@ -352,7 +300,10 @@ export function CreateKnowledgeBaseDialog({
 						<CircleAlert className="size-3.5" />
 						{t('common.cancel')}
 					</Button>
-					<Button onClick={handleSubmit} disabled={submitting || noCompatibleModels}>
+					<Button
+						onClick={handleSubmit}
+						disabled={submitting || loading || noCompatibleModels || !embeddingConfig}
+					>
 						{submitting ? (
 							<Loader2 className="size-3.5 animate-spin" />
 						) : (

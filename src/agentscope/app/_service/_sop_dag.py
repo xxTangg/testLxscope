@@ -4,6 +4,7 @@
 The persisted graph is the work queue. A renewable coordinator lease prevents
 two processes driving one run; short state locks merge independent node writes.
 """
+
 import asyncio
 import hashlib
 import json
@@ -28,7 +29,7 @@ from ._session import SessionService
 
 
 class SOPDAGRunner:
-    """One leased coordinator; every node retains its own attempts and output."""
+    """Leased coordinator with per-node attempts and output."""
 
     def __init__(self, service: Any, user_id: str, run_id: str) -> None:
         self.service = service
@@ -213,8 +214,8 @@ class SOPDAGRunner:
                                 )
                                 in _PARKED
                             ):
-                                # Reconstruct a missing dispatch registry after a
-                                # bus migration or restart. The session is durable.
+                                # Restore the dispatch registry after restart.
+                                # The session itself is durable.
                                 await self.bus.registry_set(
                                     MessageBusKeys.sop_dispatch(sid),
                                     MessageBusKeys.SOP_DISPATCH_FIELD,
@@ -241,7 +242,7 @@ class SOPDAGRunner:
         return (await self.snapshot()).state
 
     def inputs(self, record: SOPRunRecord, index: int) -> list[Msg]:
-        """Keep global instructions and explicitly bind all upstream outputs."""
+        """Keep global instructions and bind upstream outputs."""
         step = record.definition.steps[index]
         by_id = {
             definition.id: node
@@ -254,7 +255,10 @@ class SOPDAGRunner:
             given.append(
                 UserMsg(
                     name="sop",
-                    content=f"Workflow objective: {record.definition.description}",
+                    content=(
+                        f"Workflow objective: "
+                        f"{record.definition.description}"
+                    ),
                 )
             )
         for parent in step.depends_on:
@@ -319,7 +323,10 @@ class SOPDAGRunner:
                 node.attempt_id = attempt.id
                 node.attempts.append(attempt)
                 node.given = given
-                workspace_id = _generate_id()
+                manager = self.service._workspace_manager
+                workspace_id = await manager.new_workspace_id(
+                    user_id=self.user_id
+                )
                 if record.definition.workspace_grain is SOPWorkspaceGrain.RUN:
                     record.state.workspace_id = (
                         record.state.workspace_id or workspace_id
@@ -339,23 +346,33 @@ class SOPDAGRunner:
                         settings = record.definition.session_settings[
                             ref.session_key
                         ]
+                        binding = workspace_id
+                        if (
+                            record.definition.workspace_grain
+                            is SOPWorkspaceGrain.PER_SESSION_KEY
+                        ):
+                            binding = await manager.new_workspace_id(
+                                user_id=self.user_id
+                            )
                         session = await self.storage.upsert_session(
                             user_id=self.user_id,
                             agent_id=ref.agent_id,
                             config=SessionConfig(
-                                workspace_id=_generate_id()
-                                if record.definition.workspace_grain
-                                is SOPWorkspaceGrain.PER_SESSION_KEY
-                                else workspace_id,
-                                name=f"{record.definition.name} / {step.subject} / {attempt.number}",
+                                workspace_id=binding,
+                                name=(
+                                    f"{record.definition.name} / "
+                                    f"{step.subject} / {attempt.number}"
+                                ),
                                 chat_model_config=ChatModelConfig(
                                     **settings.chat_model_config
                                 ),
-                                fallback_chat_model_config=ChatModelConfig(
-                                    **settings.fallback_chat_model_config
-                                )
-                                if settings.fallback_chat_model_config
-                                else None,
+                                fallback_chat_model_config=(
+                                    ChatModelConfig(
+                                        **settings.fallback_chat_model_config
+                                    )
+                                    if settings.fallback_chat_model_config
+                                    else None
+                                ),
                             ),
                             state=AgentState(
                                 permission_context=PermissionContext(
@@ -432,7 +449,8 @@ class SOPDAGRunner:
             )
             if hashlib.sha256(data).hexdigest() != artifact["sha256"]:
                 raise ValueError(
-                    f"Published artifact {artifact['name']!r} changed after submission."
+                    f"Published artifact {artifact['name']!r} "
+                    "changed after submission."
                 )
             relative = (
                 f"inputs/{parent}/{artifact['sha256'][:12]}-{artifact['name']}"
@@ -563,12 +581,12 @@ class SOPDAGRunner:
             await asyncio.shield(self.mutate(interrupted))
             raise
         except Exception as exc:
+            message = str(exc) or type(exc).__name__
 
             def fail(latest: SOPRunRecord) -> None:
                 current = latest.state.steps[index]
                 if latest.state.cancelled or current.generation != generation:
                     return
-                message = str(exc) or type(exc).__name__
                 if (
                     not current.attempts
                     or current.attempts[-1].ended_at is not None

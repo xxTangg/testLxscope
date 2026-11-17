@@ -86,7 +86,7 @@ function DateCell({ day, isToday, events, onEventClick, moreText }: DateCellProp
 				{events.slice(0, maxVisibleEvents).map((event) => (
 					<div
 						key={event.id}
-						className="flex flex-row justify-between text-xs py-0.5 px-1 text-secondary-foreground rounded-sm cursor-pointer hover:bg-primary/20"
+						className="flex flex-row justify-between text-xs py-0.5 px-1 text-secondary-foreground rounded-sm cursor-pointer hover:bg-primary-alpha-20"
 						title={`${event.time} - ${event.title}`}
 						onClick={(e) => {
 							e.stopPropagation();

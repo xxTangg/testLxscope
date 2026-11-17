@@ -41,8 +41,7 @@ interface WorkingDirectoryDialogProps {
 	agentId: string | null;
 	sessionId: string | null;
 	/**
-	 * The session's current working directory. Absolute, or relative to
-	 * the workspace root; `null` is the root itself.
+	 * Logical personal-space path; null selects the Agent workspace.
 	 */
 	value: string | null;
 	/**
@@ -61,33 +60,7 @@ function basename(path: string): string {
 	return cut === -1 ? trimmed : trimmed.slice(cut + 1);
 }
 
-/**
- * A folder picker for the session's working directory.
- *
- * Hands back a **path**, never a file — nothing is uploaded and nothing
- * is read. Only directories are listed, since a file is never a valid
- * answer.
- *
- * Browsing is not confined to the workspace root: the picker walks
- * wherever `GET /workspace/directories` can reach, which is the sandbox
- * on a container backend and the host on a local one. Because the root
- * is backend-dependent, the browser never knows where it is until the
- * server says so — hence every listing is addressed by the absolute path
- * the previous response echoed back, and only the initial "open at the
- * session's directory" request uses the stored (possibly relative) value.
- *
- * A dialog rather than a popover: finding a folder anywhere on the
- * filesystem is a task, not a quick toggle, so it earns the room and the
- * deliberate dismissal.
- *
- * @param agentId - Agent owning the session. `null` disables the trigger.
- * @param sessionId - Session whose workspace is browsed.
- * @param value - Current working directory, or `null` for the root.
- * @param onChange - Receives the picked directory.
- * @param disabled - Locks the trigger.
- * @param className - Extra classes for the trigger button.
- * @returns The trigger button plus its dialog.
- */
+/** Browse only the signed-in account's personal space. Paths stay logical. */
 export function WorkingDirectoryDialog({
 	agentId,
 	sessionId,
@@ -107,6 +80,7 @@ export function WorkingDirectoryDialog({
 	// The listing currently on screen, and the path it came from — which
 	// trails `path` while the user is mid-edit.
 	const [listedPath, setListedPath] = useState<string | null>(null);
+	const [parentPath, setParentPath] = useState<string | null>(null);
 	const [entries, setEntries] = useState<DirectoryEntry[]>([]);
 	// Starts true because the effect below runs after the first paint —
 	// leaving it false would flash an empty listing over a directory that
@@ -139,9 +113,7 @@ export function WorkingDirectoryDialog({
 				// lie for a folder that is merely all files. Order is the
 				// backend's; the icon already says which is which.
 				setEntries(listing.entries);
-				// Adopt the resolved path: the server normalises `..` and
-				// turns a relative request absolute, so this is also how the
-				// input learns where the workspace root actually is.
+				setParentPath(listing.parent_path);
 				setPath(listing.path);
 				setListedPath(listing.path);
 			} catch (e) {
@@ -150,6 +122,7 @@ export function WorkingDirectoryDialog({
 				// blanking it would erase what they typed. `listedPath`
 				// staying null is what disables Confirm.
 				setListedPath(null);
+				setParentPath(null);
 				setEntries([]);
 				// Inline, not a toast: the dialog is the only thing the user
 				// is looking at, and a directory that has moved is a normal
@@ -186,7 +159,8 @@ export function WorkingDirectoryDialog({
 		}
 	};
 
-	const label = value ? basename(value) : t('workdir.root');
+	const label =
+		value === '~' ? t('workdir.root') : value ? basename(value) : t('workdir.agentRoot');
 
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
@@ -238,7 +212,7 @@ export function WorkingDirectoryDialog({
 									<TooltipTrigger asChild>
 										<InputGroupButton
 											type="button"
-											onClick={() => void load('')}
+											onClick={() => void load('~')}
 										>
 											<Home />
 										</InputGroupButton>
@@ -276,14 +250,12 @@ export function WorkingDirectoryDialog({
 							</Empty>
 						) : (
 							<>
-								{/* Always offered: the server resolves `..` against
-							    wherever we are, so there is no floor to
-							    special-case. */}
 								<Button
 									variant="ghost"
 									size="sm"
 									className="w-full justify-start gap-2 font-normal"
-									onClick={() => void load(`${listedPath ?? ''}/..`)}
+									disabled={parentPath === null}
+									onClick={() => parentPath !== null && void load(parentPath)}
 								>
 									<CornerLeftUp className="size-3.5 shrink-0" />
 									{t('workdir.parent')}
@@ -316,7 +288,9 @@ export function WorkingDirectoryDialog({
 											) : (
 												<File className="size-3.5 shrink-0" />
 											)}
-											<span className="min-w-0 truncate">{entry.name}</span>
+											<span className="min-w-0 truncate">
+												{entry.display_name}
+											</span>
 										</Button>
 									))
 								)}

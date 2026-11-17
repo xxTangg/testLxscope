@@ -1,4 +1,37 @@
 services:
+  egress:
+    image: testlxscope-egress:latest
+    build:
+      context: ./deploy
+      dockerfile: Dockerfile.egress
+    container_name: ${COMPOSE_PROJECT_NAME:-ori_asv1}-egress
+    restart: unless-stopped
+    # Squid sizes its startup file descriptor table from this limit.
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - >-
+          from socket import create_connection;
+          create_connection(('127.0.0.1', 3128), timeout=2).close()
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  user-sandbox:
+    image: testlxscope-sandbox:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+      additional_contexts:
+        api-image: service:agentscope
+    profiles: [build]
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -35,10 +68,20 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
+      egress:
+        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
+      USER_SANDBOX_IMAGE: testlxscope-sandbox:latest
+      USER_SANDBOX_PREFIX: ${COMPOSE_PROJECT_NAME:-ori_asv1}
+      USER_SANDBOX_EGRESS: ${COMPOSE_PROJECT_NAME:-ori_asv1}-egress
+      # Use the backend network for model calls, including private gateways.
+      NO_PROXY: "*"
+      no_proxy: "*"
       REDIS_HOST: redis
+      # Persist UTC instants; the session UI displays Asia/Shanghai (UTC+08:00).
+      TZ: Etc/UTC
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       AGENTSCOPE_PORT: 8000
@@ -50,14 +93,9 @@ services:
       AGENTSCOPE_JWT_SECRET: ${AGENTSCOPE_JWT_SECRET:-change-me-in-production-use-32-bytes}
       AGENTSCOPE_JWT_EXPIRE_MINUTES: ${AGENTSCOPE_JWT_EXPIRE_MINUTES:-1440}
       QDRANT_PATH: ${QDRANT_PATH:-/app/qdrant_data}
-      PLAYWRIGHT_MCP_COMMAND: playwright-mcp
-      # Keep the MCP child process on the same browser directory used during
-      # image build. The compatibility symlink in Dockerfile covers clients
-      # that still resolve Playwright's legacy default path.
-      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       AGENTSCOPE_DOWNLOAD_SECRET: ${AGENTSCOPE_DOWNLOAD_SECRET:-change-me-in-production}
     volumes:
-      - agentscope-workspaces:/app/examples/agent_service/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
       - agentscope-blobs:/app/blobs
       - qdrant-data:/app/qdrant_data
     healthcheck:
@@ -93,6 +131,5 @@ services:
 
 volumes:
   redis-data:
-  agentscope-workspaces:
   agentscope-blobs:
   qdrant-data:

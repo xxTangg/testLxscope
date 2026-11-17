@@ -302,6 +302,7 @@ class ResourceAccessServiceTest(IsolatedAsyncioTestCase):
                 # Shared credentials must be masked in the view.
                 "data": {"type": "test"},
                 "editable": False,
+                "enabled": True,
             },
         )
 
@@ -340,6 +341,7 @@ class ResourceAccessServiceTest(IsolatedAsyncioTestCase):
                     "updated_at": AnyValue(),
                     "data": {"type": "own"},
                     "editable": True,
+                    "enabled": True,
                 },
                 {
                     "id": "credential-1",
@@ -349,6 +351,7 @@ class ResourceAccessServiceTest(IsolatedAsyncioTestCase):
                     # Shared entry has masked data.
                     "data": {"type": "test"},
                     "editable": False,
+                    "enabled": True,
                 },
             ],
         )

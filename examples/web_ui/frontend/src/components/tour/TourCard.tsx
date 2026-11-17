@@ -19,14 +19,9 @@ export const TourCard = ({
 	const isFirst = currentStep === 0;
 	const isLast = currentStep === totalSteps - 1;
 
-	const handleClose = () => {
-		localStorage.setItem('chat_tour_done', '1');
-		closeOnborda();
-	};
-
 	const handleNext = () => {
 		if (isLast) {
-			handleClose();
+			closeOnborda();
 			return;
 		}
 		nextStep();
@@ -42,7 +37,7 @@ export const TourCard = ({
 				<CardHeader className="flex flex-row items-start justify-between gap-2">
 					<CardTitle>{step.title}</CardTitle>
 					<button
-						onClick={handleClose}
+						onClick={closeOnborda}
 						className="text-muted-foreground hover:text-foreground -mt-1"
 						aria-label={t('tour.skip')}
 					>

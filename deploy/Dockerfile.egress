@@ -1,0 +1,4 @@
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends squid python3 ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY egress.py /usr/local/bin/egress.py
+CMD ["python3", "/usr/local/bin/egress.py"]

@@ -1,6 +1,6 @@
 import { CircleAlert, Loader2 } from 'lucide-react';
 import { useState } from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 
 import { ApiError, TIMEOUT_STATUS } from '@/api/client';
 import AgentScope from '@/assets/images/agentscope.svg?react';
@@ -16,8 +16,8 @@ import { formatApiErrorForAlert } from '@/lib/api-error';
 export function LoginPage() {
 	const { t } = useTranslation();
 	const { status, login, register } = useAuth();
-	const navigate = useNavigate();
 	const location = useLocation();
+	const from = (location.state as { from?: string } | null)?.from;
 	const [username, setUsername] = useState('');
 	const [password, setPassword] = useState('');
 	const [confirmPassword, setConfirmPassword] = useState('');
@@ -25,7 +25,8 @@ export function LoginPage() {
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState('');
 
-	if (status === 'authenticated') return <Navigate to="/chat" replace />;
+	if (status === 'authenticated')
+		return <Navigate to={from ?? '/chat'} replace state={{ afterAuthentication: true }} />;
 	if (status === 'loading') {
 		return (
 			<div className="flex h-screen items-center justify-center bg-canvas">
@@ -58,8 +59,6 @@ export function LoginPage() {
 			} else {
 				await login(username.trim(), password);
 			}
-			const from = (location.state as { from?: string } | null)?.from;
-			navigate(from || '/chat', { replace: true });
 		} catch (reason) {
 			setError(describeError(reason));
 		} finally {

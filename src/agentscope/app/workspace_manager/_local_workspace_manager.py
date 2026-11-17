@@ -3,22 +3,20 @@
 
 import asyncio
 import os
+import re
 import time
 
-from typing_extensions import deprecated
-
 from ..._logging import logger
+from ..._utils._common import _generate_id
 from ...workspace import LocalWorkspace
 from ._base import WorkspaceManagerBase, IsolationPolicy
 
 
 class LocalWorkspaceManager(WorkspaceManagerBase):
-    """Manages LocalWorkspace instances with TTL-based lazy lifecycle.
+    """Account-owned local workspaces, cached by their qualified identity.
 
-    Workspaces are keyed by ``workspace_id`` in the cache. On cache miss
-    the manager reconstructs the workspace from ``basedir/agent_id`` — the
-    workdir is deterministic for local workspaces so no storage lookup is
-    needed.
+    IDs name paths below basedir: user/agents/agent, user/sessions/id,
+    or user/shared. Team members may reuse an owner's workspace identity.
     """
 
     def __init__(
@@ -67,6 +65,42 @@ class LocalWorkspaceManager(WorkspaceManagerBase):
         ]
         return [self._cache.pop(wid)[0] for wid in expired_ids]
 
+    @staticmethod
+    def _validate_component(value: str) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ValueError("Invalid workspace identity.")
+
+    def user_root(self, user_id: str) -> str:
+        """Return an account's root without following an external symlink."""
+        self._validate_component(user_id)
+        root = os.path.join(self._basedir, user_id)
+        if os.path.realpath(root) != os.path.join(
+            os.path.realpath(self._basedir), user_id
+        ):
+            raise PermissionError("Personal space cannot be a symbolic link.")
+        return root
+
+    async def assign_workspace_id(
+        self,
+        *,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+    ) -> str:
+        """Issue an identity whose owner remains verifiable after eviction."""
+        self._validate_component(user_id)
+        self._validate_component(agent_id)
+        if self._isolation is IsolationPolicy.PER_USER:
+            return f"{user_id}/shared"
+        if self._isolation is IsolationPolicy.PER_SESSION:
+            return await self.new_workspace_id(user_id=user_id)
+        return f"{user_id}/agents/{agent_id}"
+
+    async def new_workspace_id(self, *, user_id: str) -> str:
+        """Issue a fresh, account-owned workspace for a session or SOP run."""
+        self._validate_component(user_id)
+        return f"{user_id}/sessions/{_generate_id()}"
+
     async def get_workspace(
         self,
         user_id: str,
@@ -89,8 +123,25 @@ class LocalWorkspaceManager(WorkspaceManagerBase):
             workspace_id = await self.assign_workspace_id(
                 user_id=user_id,
                 agent_id=agent_id,
-                session_id="",
+                session_id=session_id,
             )
+
+        parts = workspace_id.split("/")
+        for part in parts:
+            self._validate_component(part)
+        if parts[0] != user_id:
+            raise PermissionError("Workspace does not belong to this account.")
+        if not (
+            (len(parts) == 3 and parts[1] in {"agents", "sessions"})
+            or (len(parts) == 2 and parts[1] == "shared")
+        ):
+            raise ValueError("Invalid workspace identity.")
+        root = self.user_root(user_id)
+        workdir = os.path.join(self._basedir, *parts)
+        if os.path.realpath(workdir) != os.path.join(
+            os.path.realpath(self._basedir), *parts
+        ):
+            raise PermissionError("Workspace cannot be a symbolic link.")
 
         # Phase 1: cache hit + collect expired.
         async with self._lock:
@@ -125,49 +176,17 @@ class LocalWorkspaceManager(WorkspaceManagerBase):
                 self._cache[workspace_id] = (ws, time.monotonic())
                 return ws
 
-            # Workdir is deterministic for local workspaces — no storage needed
-            workdir = os.path.join(self._basedir, agent_id)
+            os.makedirs(os.path.join(root, "shared"), exist_ok=True)
             ws = LocalWorkspace(
                 workspace_id=workspace_id,
                 workdir=workdir,
+                file_root=root,
                 default_mcps=self._default_mcps,
                 skill_paths=self._skill_paths,
             )
             await ws.initialize()
             self._cache[workspace_id] = (ws, time.monotonic())
             return ws
-
-    @deprecated(
-        "LocalWorkspaceManager.create_workspace is deprecated; "
-        "use get_workspace(workspace_id=None) instead.",
-        category=None,
-    )
-    async def create_workspace(
-        self,
-        user_id: str,
-        agent_id: str,
-        session_id: str,
-    ) -> LocalWorkspace:
-        """Create a new workspace for the given agent and return it.
-
-        .. deprecated::
-            Use :meth:`get_workspace` with ``workspace_id=None`` — it
-            falls back to :meth:`assign_workspace_id` under the
-            manager's isolation policy and reuses the cache path.
-        """
-        del user_id, session_id  # accepted for interface parity
-
-        workdir = os.path.join(self._basedir, agent_id)
-        os.makedirs(workdir, exist_ok=True)
-        ws = LocalWorkspace(
-            workdir=workdir,
-            default_mcps=self._default_mcps,
-            skill_paths=self._skill_paths,
-        )
-        await ws.initialize()
-        async with self._lock:
-            self._cache[ws.workspace_id] = (ws, time.monotonic())
-        return ws
 
     async def close(self, workspace_id: str) -> None:
         """Close and evict a single workspace from the cache."""

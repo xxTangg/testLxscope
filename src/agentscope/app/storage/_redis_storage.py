@@ -3,7 +3,7 @@
 """The Redis storage implementation."""
 
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, TYPE_CHECKING, Self
 
 from pydantic import BaseModel
@@ -282,6 +282,8 @@ class RedisStorage(StorageBase):
         base_name = (
             cred_type.removesuffix("_credential").replace("_", " ").title()
         )
+        if cred_type == "newapi_credential":
+            base_name = "longxinAI"
         if not base_name:
             base_name = "Credential"
 
@@ -912,7 +914,7 @@ class RedisStorage(StorageBase):
                 record.config = config
                 if state is not None:
                     record.state = state
-                record.updated_at = datetime.now()
+                record.updated_at = datetime.now(timezone.utc)
                 await self._set_with_ttl(key, record.model_dump_json())
                 return record
 
@@ -988,7 +990,7 @@ class RedisStorage(StorageBase):
             raise KeyError(f"Session {session_id!r} not found.")
         record = SessionRecord.model_validate_json(raw)
         record.state = state
-        record.updated_at = datetime.now()
+        record.updated_at = datetime.now(timezone.utc)
         await self._set_with_ttl(key, record.model_dump_json())
 
     async def list_sessions(
@@ -1045,7 +1047,8 @@ class RedisStorage(StorageBase):
         raw = await self._client.get(key)
         if not raw:
             return None
-        return SessionRecord.model_validate_json(raw)
+        record = SessionRecord.model_validate_json(raw)
+        return record if not agent_id or record.agent_id == agent_id else None
 
     async def delete_session(
         self,

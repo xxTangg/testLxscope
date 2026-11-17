@@ -11,7 +11,9 @@ follow, and both are asserted here:
   ``state`` to storage at all, so the handler's opening snapshot can
   never land on top of what the run has persisted since.
 """
+
 import tempfile
+from pathlib import Path
 from typing import Any
 from unittest import IsolatedAsyncioTestCase
 
@@ -102,6 +104,10 @@ class SessionConfigPatchTest(IsolatedAsyncioTestCase):
         )
         self.assertEqual(created.status_code, 201)
         self.session_id = created.json()["session_id"]
+        workspace = await app.state.workspace_manager.get_workspace(
+            "alice", self.agent_id, self.session_id
+        )
+        Path(workspace.workdir, "src", "agentscope").mkdir(parents=True)
 
         # Give the stored state something distinguishable, so a
         # clobbering write is visible rather than merely theoretical.
@@ -149,6 +155,62 @@ class SessionConfigPatchTest(IsolatedAsyncioTestCase):
             params={"agent_id": self.agent_id},
             json=body,
         )
+
+    async def test_new_session_defaults_to_accept_edits(self) -> None:
+        """The server persists the default without a frontend PATCH."""
+        record = await self.storage.get_session(
+            "alice",
+            self.agent_id,
+            self.session_id,
+        )
+        self.assertEqual(
+            record.state.permission_context.mode,
+            PermissionMode.ACCEPT_EDITS,
+        )
+        response = self.client.get(
+            "/sessions/",
+            headers=HEADERS,
+            params={"agent_id": self.agent_id},
+        )
+        self.assertEqual(response.status_code, 200)
+        state = response.json()["sessions"][0]["session"]["state"]
+        self.assertEqual(state["permission_context"]["mode"], "accept_edits")
+
+    async def test_new_session_does_not_reset_existing_permission_mode(
+        self,
+    ) -> None:
+        """New defaults cannot replace the policy a user chose earlier."""
+        for mode in PermissionMode:
+            with self.subTest(mode=mode):
+                changed = self._patch({"permission_mode": mode.value})
+                self.assertEqual(changed.status_code, 200)
+                renamed = self._patch({"name": "kept name"})
+                self.assertEqual(renamed.status_code, 200)
+                self.assertEqual(
+                    renamed.json()["state"]["permission_context"]["mode"],
+                    mode.value,
+                )
+                created = self.client.post(
+                    "/sessions/",
+                    headers=HEADERS,
+                    json={"agent_id": self.agent_id},
+                )
+                self.assertEqual(created.status_code, 201)
+                old = await self.storage.get_session(
+                    "alice",
+                    self.agent_id,
+                    self.session_id,
+                )
+                new = await self.storage.get_session(
+                    "alice",
+                    self.agent_id,
+                    created.json()["session_id"],
+                )
+                self.assertEqual(old.state.permission_context.mode, mode)
+                self.assertEqual(
+                    new.state.permission_context.mode,
+                    PermissionMode.ACCEPT_EDITS,
+                )
 
     def test_config_only_patch_does_not_write_state(self) -> None:
         """A rename leaves ``state`` entirely out of the storage call."""
@@ -210,7 +272,7 @@ class SessionConfigPatchTest(IsolatedAsyncioTestCase):
 
     def test_permission_mode_patch_writes_only_that_field(self) -> None:
         """``permission_mode`` is the one field that must carry state."""
-        response = self._patch({"permission_mode": "accept_edits"})
+        response = self._patch({"permission_mode": "default"})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(self.recorded_states), 1)
@@ -218,7 +280,7 @@ class SessionConfigPatchTest(IsolatedAsyncioTestCase):
         self.assertIsNotNone(written)
         self.assertEqual(
             written.permission_context.mode,
-            PermissionMode.ACCEPT_EDITS,
+            PermissionMode.DEFAULT,
         )
         # Everything else in the state rides along untouched.
         self.assertEqual(
@@ -306,7 +368,7 @@ class SessionConfigPatchTest(IsolatedAsyncioTestCase):
         self.assertTrue(listed["is_running"])
 
     def test_cwd_round_trips(self) -> None:
-        """A relative cwd is stored and read back verbatim."""
+        """A verified directory is stored as a logical personal-space path."""
         self.assertEqual(
             self._patch({"cwd": "src/agentscope"}).status_code,
             200,
@@ -319,7 +381,7 @@ class SessionConfigPatchTest(IsolatedAsyncioTestCase):
         ).json()
         self.assertEqual(
             listed["sessions"][0]["session"]["config"]["cwd"],
-            "src/agentscope",
+            f"~/agents/{self.agent_id}/src/agentscope",
         )
 
     def test_cwd_defaults_to_none_and_clears_to_none(self) -> None:
@@ -341,16 +403,29 @@ class SessionConfigPatchTest(IsolatedAsyncioTestCase):
         ).json()
         self.assertIsNone(listed["sessions"][0]["session"]["config"]["cwd"])
 
-    def test_cwd_is_not_confined_to_the_workspace_root(self) -> None:
-        """Absolute paths and ``..`` are ordinary values, not attacks.
-
-        ``cwd`` only names a place to look — it never changes where a
-        tool executes — and the directory listing it feeds is itself
-        unconfined. Rejecting these would stop a user from pointing the
-        UI at a checkout that lives outside the workspace.
-        """
-        for outside in ("/etc", "..", "../elsewhere", "a/../../elsewhere"):
+    def test_cwd_stays_within_account(self) -> None:
+        allowed = self._patch({"cwd": ".."})
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.json()["config"]["cwd"], "~/agents")
+        self.recorded_states.clear()
+        for outside in ("/etc", "../../..", "~/../bob", "~/../../etc"):
             with self.subTest(cwd=outside):
-                response = self._patch({"cwd": outside})
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json()["config"]["cwd"], outside)
+                self.assertEqual(
+                    self._patch({"cwd": outside}).status_code, 403
+                )
+        self.assertEqual(self.recorded_states, [])
+
+    def test_missing_cwd_is_rejected(self) -> None:
+        self.assertEqual(self._patch({"cwd": "missing"}).status_code, 404)
+        self.assertEqual(self.recorded_states, [])
+
+    def test_explicit_workspace_binding_is_not_a_public_api(self) -> None:
+        response = self.client.post(
+            "/sessions/",
+            headers=HEADERS,
+            json={
+                "agent_id": self.agent_id,
+                "workspace_id": "bob/agents/other",
+            },
+        )
+        self.assertEqual(response.status_code, 422)

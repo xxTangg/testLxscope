@@ -16,6 +16,24 @@ from ....rag import Chunk, VectorSearchResult
 from ...rag.knowledge_base_manager._dimension_policy import DimensionPolicy
 
 
+class CreateKbEmbeddingModelConfig(EmbeddingModelConfig):
+    """Embedding settings with automatic dimension discovery for gateways."""
+
+    dimensions: int | None = Field(default=None, gt=0)
+
+
+class KbEmbeddingProbeRequest(BaseModel):
+    """A model whose native embedding dimension should be measured."""
+
+    model: str = Field(min_length=1)
+
+
+class KbEmbeddingProbeResponse(BaseModel):
+    """The native vector dimension measured by the server."""
+
+    dimensions: int = Field(gt=0)
+
+
 class CreateKnowledgeBaseRequest(BaseModel):
     """Request body for creating a new knowledge base."""
 
@@ -24,7 +42,7 @@ class CreateKnowledgeBaseRequest(BaseModel):
         default="",
         description="Free-form description shown in the UI.",
     )
-    embedding_model_config: EmbeddingModelConfig = Field(
+    embedding_model_config: CreateKbEmbeddingModelConfig = Field(
         description=(
             "Embedding model used both at indexing and at query time. "
             "Cannot be changed after creation — switching would "
@@ -225,7 +243,8 @@ class KbEmbeddingProvider(BaseModel):
         description=(
             "Embedding model cards available under this credential, "
             "filtered to those compatible with the manager's "
-            "dimension policy."
+            "dimension policy. Gateway credentials may have an empty "
+            "catalogue until their models are discovered."
         ),
     )
 
@@ -241,8 +260,7 @@ class ListKbEmbeddingModelsResponse(BaseModel):
 
     providers: list[KbEmbeddingProvider] = Field(
         description=(
-            "One entry per credential that has at least one "
-            "compatible embedding model."
+            "Credentials with compatible models or gateway discovery support."
         ),
     )
     policy: DimensionPolicy = Field(

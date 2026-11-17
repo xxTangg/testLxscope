@@ -24,7 +24,7 @@ Concrete implementations:
 * :class:`LocalBackend` — default; uses ``asyncio`` subprocesses,
   ``aiofiles``, and ``os.*`` for host-local I/O.  Injected automatically
   when no explicit backend is given.
-* ``DockerBackend`` — uses ``aiodocker`` exec / archive APIs.
+* ``DockerBackend`` — uses ``aiodocker`` exec as the container user.
 * ``E2BBackend`` — uses the E2B SDK ``commands`` / ``files`` APIs.
 
 By accepting a ``BackendBase`` parameter, each builtin tool can
@@ -35,6 +35,8 @@ workspace-specific branching inside the tool code itself.
 from __future__ import annotations
 
 import asyncio
+import stat as stat_module
+from contextlib import asynccontextmanager
 import os
 import posixpath
 import shlex
@@ -108,6 +110,73 @@ class DirEntry:
     mtime: float | None = None
 
 
+@dataclass
+class OpenedFile:
+    """Metadata and bytes from one already-open, confined regular file."""
+
+    size: int
+    stream: AsyncIterator[bytes]
+
+
+def _open_confined(root: str, path: str) -> int:
+    relative = os.path.relpath(path, root)
+    parts = relative.split(os.sep)
+    if relative == "." or any(p in {"", ".", ".."} for p in parts):
+        raise PermissionError("Invalid personal-space file path.")
+    current = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for index, part in enumerate(parts):
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            if index < len(parts) - 1:
+                flags |= os.O_DIRECTORY
+            child = os.open(part, flags, dir_fd=current)
+            os.close(current)
+            current = child
+        info = os.fstat(current)
+        if not stat_module.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise PermissionError(
+                "Only single-link regular files may be read."
+            )
+        result, current = current, -1
+        return result
+    finally:
+        if current != -1:
+            os.close(current)
+
+
+# Used by Docker exec to keep the opened descriptor alive while streaming.
+_SAFE_READ_SHIM = """
+import os,sys,json,stat
+root,path=sys.argv[1:]
+fd=None
+opened=False
+try:
+ parts=os.path.relpath(path,root).split(os.sep)
+ if any(p in ('','.','..') for p in parts): raise PermissionError()
+ fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+ for i,p in enumerate(parts):
+  flags=os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK
+  if i<len(parts)-1: flags|=os.O_DIRECTORY
+  child=os.open(p,flags,dir_fd=fd);os.close(fd);fd=child
+ info=os.fstat(fd)
+ if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1: raise PermissionError()
+ print(json.dumps({'size':info.st_size}),flush=True)
+ opened=True
+ while True:
+  data=os.read(fd,1048576)
+  if not data: break
+  sys.stdout.buffer.write(data);sys.stdout.buffer.flush()
+except FileNotFoundError:
+ if opened: raise
+ print(json.dumps({'error':404}),flush=True)
+except OSError:
+ if opened: raise
+ print(json.dumps({'error':403}),flush=True)
+finally:
+ if fd is not None: os.close(fd)
+"""
+
+
 # ── helpers ────────────────────────────────────────────────────────────
 
 
@@ -175,6 +244,53 @@ class BackendBase(ABC):
     #:     …) or the :meth:`abspath` wrapper below, which requires an
     #:     explicit ``cwd`` argument.
     _path_module: ModuleType = posixpath
+
+    @asynccontextmanager
+    async def open_read(
+        self, path: str, *, root: str
+    ) -> AsyncIterator[OpenedFile]:
+        """Open below a trusted directory without following links."""
+        raise NotImplementedError("This backend has no confined file reader.")
+        yield  # pragma: no cover
+
+    async def realpath(self, path: str) -> str:
+        """Resolve symlinks in the backend's filesystem, including parents."""
+        result = await self.exec_shell(
+            [
+                "python3",
+                "-c",
+                "import os,sys; print(os.path.realpath(sys.argv[1]))",
+                path,
+            ]
+        )
+        if not result.ok():
+            raise OSError("Could not resolve workspace path.")
+        return result.stdout.decode().rstrip("\r\n")
+
+    async def resolve_path(self, path: str, *, root: str, cwd: str) -> str:
+        """Resolve a path and refuse lexical or symlink escapes from root."""
+        paths = self._path_module
+        target = self.abspath(path, cwd=cwd)
+        boundary = root
+        for resolved in (False, True):
+            if resolved:
+                target = await self.realpath(target)
+                boundary = await self.realpath(root)
+            try:
+                contained = paths.normcase(
+                    paths.commonpath([target, boundary])
+                ) == paths.normcase(boundary)
+            except ValueError:
+                contained = False
+            if not contained:
+                raise PermissionError(
+                    "Path must stay inside your personal space."
+                )
+        return target
+
+    def relpath(self, path: str, root: str) -> str:
+        """Return a relative path using the backend's path semantics."""
+        return self._path_module.relpath(path, root)
 
     #: The operating system family of the backend's **environment**,
     #: following the :data:`os.name` convention (``"posix"`` or
@@ -760,6 +876,34 @@ class LocalBackend(BackendBase):
     # The local backend runs commands on the host, so its environment
     # OS is the host OS.
     os_name = os.name
+
+    @asynccontextmanager
+    async def open_read(
+        self, path: str, *, root: str
+    ) -> AsyncIterator[OpenedFile]:
+        try:
+            fd = _open_confined(root, path)
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise PermissionError(
+                "File is outside the personal space or is a link."
+            ) from exc
+
+        async def content() -> AsyncIterator[bytes]:
+            while chunk := await asyncio.to_thread(
+                os.read, fd, DEFAULT_READ_CHUNK_SIZE
+            ):
+                yield chunk
+
+        try:
+            yield OpenedFile(os.fstat(fd).st_size, content())
+        finally:
+            os.close(fd)
+
+    async def realpath(self, path: str) -> str:
+        """Resolve local symlinks and Windows junctions."""
+        return os.path.realpath(path)
 
     async def exec_shell(
         self,

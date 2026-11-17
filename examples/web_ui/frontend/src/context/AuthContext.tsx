@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { authApi, type AuthUser } from '@/api';
+import { authApi, type AuthUser, type LoginResponse } from '@/api';
 import { AUTH_UNAUTHORIZED_EVENT, clearAccessToken, getAccessToken } from '@/api/client';
 import { AuthContext, type AuthStatus } from '@/context/auth-context';
 import { queryClient } from '@/lib/query-client';
 
 function clearUserState() {
-	clearAccessToken();
 	queryClient.clear();
 	localStorage.removeItem('chat_last_agent');
 	localStorage.removeItem('chat_last_session');
@@ -17,10 +16,14 @@ function clearUserState() {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [status, setStatus] = useState<AuthStatus>('loading');
 	const [user, setUser] = useState<AuthUser | null>(null);
+	const [autoTourPending, setAutoTourPending] = useState(false);
+	const clearAutoTour = useCallback(() => setAutoTourPending(false), []);
 
 	const becomeAnonymous = useCallback(() => {
+		clearAccessToken();
 		clearUserState();
 		setUser(null);
+		setAutoTourPending(false);
 		setStatus('anonymous');
 	}, []);
 
@@ -43,31 +46,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		return () => window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized);
 	}, [becomeAnonymous]);
 
-	const login = useCallback(async (username: string, password: string) => {
-		const currentUser = await authApi.login(username, password);
-		queryClient.clear();
-		setUser(currentUser);
+	const finishAuthentication = useCallback(({ user, show_tour }: LoginResponse) => {
+		clearUserState();
+		setUser(user);
+		setAutoTourPending(show_tour === true);
 		setStatus('authenticated');
 	}, []);
 
-	const register = useCallback(async (username: string, password: string) => {
-		const currentUser = await authApi.register(username, password);
-		queryClient.clear();
-		setUser(currentUser);
-		setStatus('authenticated');
-	}, []);
+	const login = useCallback(
+		async (username: string, password: string) => {
+			finishAuthentication(await authApi.login(username, password));
+		},
+		[finishAuthentication],
+	);
 
-	const logout = useCallback(async () => {
-		try {
-			await authApi.logout();
-		} finally {
-			becomeAnonymous();
-		}
-	}, [becomeAnonymous]);
+	const register = useCallback(
+		async (username: string, password: string) => {
+			finishAuthentication(await authApi.register(username, password));
+		},
+		[finishAuthentication],
+	);
 
 	const value = useMemo(
-		() => ({ status, user, login, register, logout }),
-		[status, user, login, register, logout],
+		() => ({
+			status,
+			user,
+			autoTourPending,
+			clearAutoTour,
+			login,
+			register,
+			logout: becomeAnonymous,
+		}),
+		[status, user, autoTourPending, clearAutoTour, login, register, becomeAnonymous],
 	);
 
 	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -2,6 +2,7 @@ FROM node:20-bookworm-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    TZ=Etc/UTC \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app/src \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
@@ -35,13 +36,12 @@ RUN npm install --global @playwright/mcp@latest \
          ln -s /ms-playwright /root/.cache/ms-playwright; \
        fi
 
-COPY . /app
+COPY pyproject.toml /tmp/project.toml
 
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
     && /opt/venv/bin/pip install uv \
-    && /opt/venv/bin/pip install \
-        ".[service,storage-redis,channel,vdb-qdrant]"
+    && /opt/venv/bin/python -c "import tomllib,subprocess; p=tomllib.load(open('/tmp/project.toml','rb'))['project']; d=p['dependencies']+sum((p['optional-dependencies'][k] for k in ('service','storage-redis','channel','vdb-qdrant','workspace-docker')),[]); subprocess.check_call(['/opt/venv/bin/pip','install',*d])"
 
 # Runtime dependencies used by the installed office-document skills. Keeping
 # them in the image avoids slow, ephemeral package installs during a chat.
@@ -56,6 +56,9 @@ RUN /opt/venv/bin/pip install \
         PyYAML \
         Pillow \
     && npm install --global pptxgenjs
+
+COPY . /app
+RUN /opt/venv/bin/pip install --no-deps .
 
 ENV PATH="/opt/venv/bin:${PATH}"
 

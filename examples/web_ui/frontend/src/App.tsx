@@ -23,14 +23,14 @@ import { useAuth } from '@/hooks/useAuth';
 import { useTranslation } from '@/i18n/useI18n';
 import { queryClient } from '@/lib/query-client';
 import { AccountPage } from '@/pages/account';
-import { ChannelPage } from '@/pages/channel';
 import { ChatPage } from '@/pages/chat';
 import { CredentialPage } from '@/pages/credential';
 import { KnowledgePage } from '@/pages/knowledge';
 import { LoginPage } from '@/pages/login';
 import { SchedulePage } from '@/pages/schedule';
-import { SOPPage } from '@/pages/sop';
 import { SetupPage } from '@/pages/setup';
+import { SOPPage } from '@/pages/sop';
+import { UserAdminPage } from '@/pages/user-admin';
 
 function SetupPageRoute() {
 	const navigate = useNavigate();
@@ -64,6 +64,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 	return children;
 }
 
+function UserAdminRoute() {
+	const { user } = useAuth();
+	return user?.is_admin ? <UserAdminPage /> : <Navigate to="/account" replace />;
+}
+
 const router = createBrowserRouter([
 	{
 		element: (
@@ -87,7 +92,7 @@ const router = createBrowserRouter([
 					},
 					{ path: '/schedule', element: <SchedulePage /> },
 					{ path: '/sop', element: <SOPPage /> },
-					{ path: '/channel', element: <ChannelPage /> },
+					{ path: '/channel', element: <Navigate to="/chat" replace /> },
 					{ path: '/credential', element: <CredentialPage /> },
 					{ path: '/mcp', element: <MCPHubPage /> },
 					{ path: '/mcp/:hubId', element: <MCPHubPage /> },
@@ -96,6 +101,7 @@ const router = createBrowserRouter([
 					{ path: '/knowledge', element: <KnowledgePage /> },
 					{ path: '/knowledge/:kbId', element: <KnowledgePage /> },
 					{ path: '/account', element: <AccountPage /> },
+					{ path: '/admin/users', element: <UserAdminRoute /> },
 				],
 			},
 		],
@@ -121,6 +127,7 @@ function App() {
 			<AuthProvider>
 				<OnbordaProvider>
 					<Onborda
+						interact
 						steps={tours}
 						cardComponent={TourCard}
 						shadowOpacity="0.6"

@@ -1,0 +1,204 @@
+[
+  {
+    "case": "control_no_identity_directory",
+    "status": 401,
+    "expected": 401,
+    "passed": true
+  },
+  {
+    "case": "control_spoofed_user_header",
+    "status": 401,
+    "expected": 401,
+    "passed": true
+  },
+  {
+    "case": "control_owner_directory",
+    "status": 200,
+    "expected": 200,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_directory",
+    "status": 404,
+    "expected": 404,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_messages",
+    "status": 404,
+    "expected": 404,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_status",
+    "status": 404,
+    "expected": 404,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_sse",
+    "status": 404,
+    "expected": 404,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_config",
+    "status": 404,
+    "expected": 404,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_agent_edit",
+    "status": 404,
+    "expected": 404,
+    "passed": true
+  },
+  {
+    "case": "control_parent_escape",
+    "status": 403,
+    "expected": 403,
+    "passed": true
+  },
+  {
+    "case": "control_absolute_other_user_path",
+    "status": 403,
+    "expected": 403,
+    "passed": true
+  },
+  {
+    "case": "control_legacy_binding_request",
+    "status": 422,
+    "expected": 422,
+    "passed": true
+  },
+  {
+    "case": "control_legacy_download_header",
+    "status": 422,
+    "expected": 422,
+    "passed": true
+  },
+  {
+    "case": "control_regular_user_admin_api",
+    "status": 403,
+    "expected": 403,
+    "passed": true
+  },
+  {
+    "case": "control_agent_list",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "case": "control_credentials_list",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_credential_edit",
+    "status": 404,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_credential_delete",
+    "status": 404,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_kb_document_token",
+    "status": 404,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_kb_chunks",
+    "status": 404,
+    "passed": true
+  },
+  {
+    "case": "control_cross_user_kb_search",
+    "status": 404,
+    "passed": true
+  },
+  {
+    "case": "control_owner_kb_download",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "case": "control_kb_header_spoof",
+    "status": 422,
+    "passed": true
+  },
+  {
+    "case": "control_disabled_account_token",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "case": "control_revoked_account_token",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "case": "F_chat_foreign_session_event_write",
+    "http_status": 200,
+    "victim_events_added": 2,
+    "victim_persistent_messages": 0,
+    "attacker_namespace_messages": 1
+  },
+  {
+    "case": "F_foreign_confirmation_routing",
+    "http_status": 200,
+    "returned_worker_session": "worker-b",
+    "queued_triggers": 1
+  },
+  {
+    "case": "F_foreign_delete_side_effects",
+    "http_status": 404,
+    "victim_record_survived": true,
+    "victim_events_remaining": 0,
+    "victim_projections_remaining": 0,
+    "victim_cancel_sent": true
+  },
+  {
+    "case": "F_builtin_read_other_user",
+    "permission": "PermissionBehavior.ALLOW",
+    "read_synthetic_b_marker": true
+  },
+  {
+    "case": "F_tool_inherits_service_environment",
+    "synthetic_environment_inherited": true
+  },
+  {
+    "case": "F_file_open_race",
+    "read_synthetic_b_marker": true
+  },
+  {
+    "case": "F_hardlink_file_alias",
+    "read_synthetic_b_marker": true
+  },
+  {
+    "case": "F_html_upload_without_model_or_shell",
+    "status": 201
+  },
+  {
+    "case": "F_html_response_headers",
+    "status": 200,
+    "content_type": "text/html; charset=utf-8",
+    "content_disposition": null,
+    "csp": null
+  },
+  {
+    "case": "R_gateway_internal_http_access",
+    "status": 200,
+    "synthetic_internal_response_returned": true
+  },
+  {
+    "case": "F_same_origin_file_xss",
+    "browser_script_read_fake_victim_token": true
+  },
+  {
+    "total_cases": 36,
+    "storage": "synthetic in-memory only",
+    "models_called": false
+  }
+]

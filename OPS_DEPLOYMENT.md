@@ -43,7 +43,7 @@ Web UI 地址；后端 API 和 Redis 都不发布到宿主机端口。
 
 ## 2. 服务器要求
 
-- Linux 服务器，已安装 Docker Engine 和 Docker Compose v2
+- Linux 服务器，已安装 Docker Engine 28+ 和 Docker Compose v2（支持 additional_contexts）
 - 用户网络能够访问 `WEB_UI_PORT`（默认 `8000`）
 - 服务器能够访问配置的模型 API；离线内网环境需要确保模型 API 在内网可达
 - 至少准备一个可用的 OpenAI-compatible 模型 API Key
@@ -77,7 +77,7 @@ cp .env.example .env
 
 脚本会在 `dist/agentscope-offline-时间戳/` 生成：
 
-- `agentscope-images.tar`：AgentScope 后端、Web UI 和 Redis 镜像
+- `agentscope-images.tar`：AgentScope 后端、账号工具运行时、出站代理、Web UI 和 Redis 镜像
 - `docker-compose.yml`
 - `.env.example`
 - `OPS_DEPLOYMENT.md`
@@ -86,18 +86,49 @@ cp .env.example .env
 镜像归档使用打包机器 Docker 的 Linux 架构；请在与目标服务器架构一致的 Linux/amd64
 或 Linux/arm64 Docker 环境中打包。`manifest.json` 会标明归档的平台。
 
-将整个目录复制到服务器后执行：
+将离线包解压到服务器。先检查 `uname -m` 与 `manifest.json` 的平台是否对应
+（`x86_64` 对应 `linux/amd64`），再核对 `sha256sum agentscope-images.tar` 与
+`manifest.json` 里的 `sha256` 是否一致。
+
+#### 首次部署
+
+进入解压目录执行：
 
 ```bash
+cd /path/to/agentscope-offline-时间戳
 docker load -i agentscope-images.tar
 cp .env.example .env
 ```
 
-离线启动时使用 `--no-build`，否则 Compose 可能尝试重新构建镜像：
+编辑 `.env`，设置管理员密码、JWT 密钥和下载密钥；生产环境建议同时设置 Redis 密码。
+
+启动服务并等待健康检查通过：
 
 ```bash
-docker compose up -d --no-build
+docker compose up -d --no-build --pull never --wait
+docker compose ps
 ```
+
+Redis 数据卷由 Compose 自动创建，后端会在账号目录为空时初始化管理员。
+
+#### 升级已有部署
+
+使用原部署目录、原 `.env` 和原 Compose 项目名，便于复用 Redis、文件和知识库数据卷。
+如果原启动命令带 `-p`，升级时使用相同的参数。将下面的路径替换为实际目录：
+
+```bash
+package=/path/to/agentscope-offline-时间戳
+cd /path/to/agentscope
+cp -a docker-compose.yml "docker-compose.yml.bak.$(date +%Y%m%d-%H%M%S)"
+docker load -i "$package/agentscope-images.tar"
+cp "$package/docker-compose.yml" ./docker-compose.yml
+docker compose up -d --no-build --pull never --wait
+docker compose ps
+```
+
+启动后应看到 `redis`、`egress`、`agentscope` 和 `web-ui` 都通过健康检查。
+`egress` 的文件描述符软硬上限设为 `8192`，后端根据凭证地址直连模型网关。
+打开网页后，用实际模型凭证发送一条消息确认端到端连通。
 
 ## 4. 配置 `.env`
 
@@ -107,7 +138,7 @@ docker compose up -d --no-build
 # 用户浏览器访问的 Web UI 端口
 WEB_UI_PORT=8000
 
-# 默认登录账号。user_id 是后端数据隔离使用的稳定标识
+# 初始管理员。user_id 是后端数据隔离使用的稳定标识
 AGENTSCOPE_USERNAME=admin
 AGENTSCOPE_USER_ID=local-user
 AGENTSCOPE_PASSWORD=请设置登录密码
@@ -124,40 +155,42 @@ REDIS_PASSWORD=请设置 Redis 密码
 
 ```
 
-默认配置创建一个账号。若需要多个用户，可在 `.env` 中设置
-`AGENTSCOPE_AUTH_USERS`，每个账号必须使用不同的 `user_id`：
+系统在 Redis 账号目录为空时创建初始管理员。若首次启动时还要预置普通账号，可在
+`.env` 中设置 `AGENTSCOPE_AUTH_USERS`。每个账号必须使用不同的 `user_id`，并且
+`user_id` 只能包含英文字母、数字、连字符和下划线：
 
 ```env
 AGENTSCOPE_AUTH_USERS={"alice":{"user_id":"user-alice","password":"alice-password"},"bob":{"user_id":"user-bob","password":"bob-password"}}
 ```
 
-登录成功后，Web UI 使用 JWT 访问 API；API 从已验证的 token 中取得 `user_id`，
-并沿用现有的用户维度存储隔离。修改账号配置或 JWT 密钥后需要重启
-`agentscope` 服务；修改 JWT 密钥会使之前签发的 token 失效。
+用户也可以在登录页自助注册。所有账号的密码校验数据、角色和状态都保存在 Redis
+数据卷中。首次创建后，账号以 Redis 为准，日常管理请打开左下角的「账号中心 → 用户管理」。
+管理员可以搜索账号、重置密码、停用或恢复普通账号，并查看任意账号近 7 天或 30 天的
+Token 用量。密码重置和停用会使目标账号之前签发的登录凭证失效，`user_id` 保持不变。
+用量来自已保存的对话，删除对话会从统计中移除对应记录。
 
-用户也可以在登录页自助注册。注册账号及其密码校验数据保存在 Redis 数据卷中，
-每个注册账号会自动生成独立的 `user_id`；重建容器不会丢失，删除 Redis 数据卷则
-会同时删除这些注册账号。登录后的用户入口提供账号信息、切换账号、退出登录和
-当前账号的 Token 用量统计。
+登录成功后，Web UI 使用 JWT 访问 API。修改 JWT 密钥并重新创建 `agentscope` 容器后，
+所有用户都需要重新登录。重建容器会保留账号，删除 Redis 数据卷会同时删除账号和会话。
 
 ## 5. 启动服务
 
 ### 在线构建并启动
 
 ```bash
-docker compose up -d --build
+docker compose --profile build build agentscope user-sandbox egress web-ui
+docker compose up -d --no-build
 docker compose ps
 ```
 
 ### 使用已加载的离线镜像启动
 
 ```bash
-docker compose up -d --no-build
+docker compose up -d --no-build --pull never --wait
 docker compose ps
 ```
 
-三个服务状态均应为 `running`，并且 `agentscope`、`web-ui` 的健康检查应通过。
-升级已有部署时执行上述 `docker compose up -d --build`，Compose 会移除后端的宿主机
+四个常驻服务（含 `egress`）状态均应为 `running`，并且 `agentscope`、`web-ui` 的健康检查应通过。
+升级已有部署时执行上述构建和启动命令，Compose 会移除后端的宿主机
 端口映射且保留数据卷；也请删除云安全组或防火墙中旧的 `8001` 放行规则。
 
 ## 6. 部署后检查
@@ -187,7 +220,7 @@ sudo ufw allow from <用户网段> to any port 8000 proto tcp
 
 1. 运维人员确认服务器 IP 或 DNS 已指向部署服务器。
 2. 在浏览器打开 `http://<服务器 IP 或域名>:8000`。
-3. 使用 `.env` 中配置的用户名和密码登录。
+3. 首次部署时，使用 `.env` 中设置的初始管理员账号登录。
 4. 前端通过当前站点的 `/api/` 路径访问后端，无需填写 API 地址。
 
 用户只需要访问一个地址：
@@ -247,10 +280,13 @@ server {
 docker compose ps
 
 # 查看最近日志
-docker compose logs --tail=200 agentscope web-ui redis
+docker compose logs --tail=200 agentscope web-ui redis egress
 
 # 持续查看后端日志
 docker compose logs -f agentscope
+
+# 查看代理请求的 4xx/5xx 记录
+docker compose exec -T egress tail -n 100 /var/log/squid/egress-failures.log
 
 # 重启服务
 docker compose restart
@@ -259,8 +295,8 @@ docker compose restart
 docker compose down
 ```
 
-不要执行 `docker compose down -v`，否则会删除 Redis、工作区、文件和 Qdrant
-数据卷。
+不要执行 `docker compose down -v`，否则会删除 Compose 声明的 Redis、文件和 Qdrant
+数据卷。账号工作区卷由 API 独立管理，备份时需另外包含。
 
 ## 10. 常见问题
 
@@ -269,17 +305,27 @@ docker compose down
 | 浏览器打不开 `:8000` | 检查 `web-ui` 状态、服务器端口映射、安全组和防火墙 |
 | 页面能打开，但 API 请求失败 | 检查 `http://127.0.0.1:8000/api/auth/health`、`web-ui` 日志及 Compose 网络 |
 | API 返回 503 或服务未就绪 | 查看 `docker compose logs agentscope redis`，确认 Redis 和模型配置正常 |
-| 用户被分到错误的数据空间 | 检查 `AGENTSCOPE_AUTH_USERS`，确保每个账号使用唯一且稳定的 `user_id` |
+| `egress` 不健康或反复重启 | 查看 `docker compose logs --tail=100 egress`。用 `docker inspect --format '{{json .HostConfig.Ulimits}}' "$(docker compose ps -a -q egress)"` 核对 `nofile` 的软硬上限均为 `8192` |
+| 聊天提示上游模型服务错误 | 发送一条新消息复现，按时间对照 `agentscope` 与模型网关的日志。模型连通性可在对应 New API 凭证的「测试对话模型」中检查 |
+| 用户登录后看不到原会话 | 在「用户管理」确认登录用户名，并在该用户的「账号信息」核对 `user_id` |
 | 服务器本机正常，外部访问失败 | 检查云安全组、UFW/iptables、公司网络和 DNS |
 
 ## 11. 生产环境安全检查
 
 - 使用 HTTPS，并通过 Web UI 的同源 `/api/` 代理访问后端。
 - 替换默认登录密码和 `AGENTSCOPE_JWT_SECRET`，不要把真实值提交到 Git。
-- 当前 JWT 是轻量账号隔离方案；如需管理员后台、密码找回、撤销 token、权限角色或抵御恶意攻击，再接入完整账号体系或公司 SSO。
+- 管理员后台支持账号停用、密码重置和令牌撤销；按公司需要接入 SSO。
 - 将 `AGENTSCOPE_DOWNLOAD_SECRET` 替换成随机长字符串。
 - 设置 Redis 密码，并确认 Redis 端口没有映射到公网。
 - 后端 API 不发布宿主机端口，只允许 Compose 内部网络和 Web UI 代理访问。
-- 定期备份 Docker 数据卷：`redis-data`、`agentscope-workspaces`、
-  `agentscope-blobs` 和 `qdrant-data`。
+- 定期备份 Docker 数据卷：`redis-data`、`agentscope-blobs`、`qdrant-data`，
+  以及带有 `agentscope.deployment` 标签的所有账号数据卷。
 - 在网页「凭证」页面配置 `longxin_AI`，由后端保存模型 API Key。请勿将 Key 提交到 Git 或写入前端代码。
+
+## 账号工具运行边界
+
+每个账号的工具在独立的非 root 容器中运行，只挂载本账号数据卷。账号网络使用 internal + isolated bridge，无宿主机桥接地址，普通公网 HTTP(S) 经 `egress` 代理访问。后端的聊天、模型发现和 Embedding 请求直接连接凭证指定的网关。在凭证表单中填写后端可访问的 HTTP(S) 地址，例如 `http://newapi.internal:3000/v1`。
+
+API 是可信容器编排入口，需要挂载 Docker socket；工具容器不会得到该 socket、API 源码、Redis 网络或服务密钥。`user-sandbox` 是只构建的镜像，不作为常驻 Compose 服务启动；首次使用文件或工具时，API 自动创建账号容器。账号容器和网络在 API 正常退出时释放，数据卷保留。每个活动账号默认限制 1 GiB 内存、2 CPU、256 个进程，部署容量需要按活跃账号数准备。
+
+账号数据卷独立于 Compose 的静态卷列表，备份时可用 `docker volume ls --filter label=agentscope.deployment=<部署前缀>` 查找。文件空间规则见 [账号文件空间](docs/user-file-space.md)。

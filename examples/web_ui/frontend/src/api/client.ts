@@ -8,8 +8,7 @@ if (typeof window !== 'undefined') localStorage.removeItem('server_url');
 
 export const getBaseUrl = () => `${window.location.origin}${API_BASE_PATH}`;
 
-export const buildApiUrl = (path: string) =>
-	new URL(path.replace(/^\/+/, ''), getBaseUrl());
+export const buildApiUrl = (path: string) => new URL(path.replace(/^\/+/, ''), getBaseUrl());
 const ACCESS_TOKEN_KEY = 'agentscope_access_token';
 
 export const getAccessToken = () => localStorage.getItem(ACCESS_TOKEN_KEY);
@@ -144,6 +143,7 @@ export const client = {
 		params?: Record<string, string>,
 		options?: {
 			silent?: boolean;
+			signal?: AbortSignal;
 			authenticated?: boolean;
 			timeoutMs?: number;
 		},

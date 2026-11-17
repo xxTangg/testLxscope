@@ -55,5 +55,5 @@ class TestLocalWorkspaceManager(IsolatedAsyncioTestCase):
         self.assertIsNot(alice, bob)
         self.assertListEqual(
             [alice.kwargs["workspace_id"], bob.kwargs["workspace_id"]],
-            ["982aa9b33217069a", "883053c3e4594c5b"],
+            ["alice/shared", "bob/shared"],
         )

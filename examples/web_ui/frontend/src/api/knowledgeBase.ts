@@ -1,4 +1,5 @@
 import { ApiError, buildApiUrl, client, getAccessToken } from './client';
+import type { NewApiModelCandidate } from './credential';
 import type {
 	CreateKnowledgeBaseRequest,
 	CreateKnowledgeBaseResponse,
@@ -177,6 +178,21 @@ export const knowledgeBaseApi = {
 	listEmbeddingModels: () =>
 		client.get<ListKbEmbeddingModelsResponse>('/knowledge_bases/embedding_models'),
 
+	discoverEmbeddingModels: (credentialId: string, signal: AbortSignal) =>
+		client.get<NewApiModelCandidate[]>(
+			`/knowledge_bases/embedding_models/${credentialId}/discover`,
+			undefined,
+			{ silent: true, signal, timeoutMs: 15_000 },
+		),
+
+	probeEmbeddingDimensions: (credentialId: string, model: string, signal: AbortSignal) =>
+		client.post<{ dimensions: number }>(
+			`/knowledge_bases/embedding_models/${credentialId}/dimensions`,
+			{ model },
+			undefined,
+			{ silent: true, signal, timeoutMs: 15_000 },
+		),
+
 	listChunkers: () => client.get<ListChunkersResponse>('/knowledge_bases/chunkers'),
 
 	/** Fetch the JSON Schema describing the KB middleware's tunable params. */
@@ -252,9 +268,7 @@ export const knowledgeBaseApi = {
 		token: string,
 		download = false,
 	) => {
-		const url = buildApiUrl(
-			`/knowledge_bases/${knowledgeBaseId}/documents/${documentId}`,
-		);
+		const url = buildApiUrl(`/knowledge_bases/${knowledgeBaseId}/documents/${documentId}`);
 		url.searchParams.set('token', token);
 		if (download) url.searchParams.set('download', 'true');
 		return url.toString();

@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """Workspace service — resolution, download tokens, uploads, git."""
+
 import asyncio
+from contextlib import asynccontextmanager
+import json
 import re
 import tarfile
 from typing import AsyncIterator, Literal
 
-from fastapi import HTTPException, UploadFile, status
+from fastapi import HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from ._download_token import (
@@ -13,10 +16,12 @@ from ._download_token import (
     sign_download_token,
     verify_download_token,
 )
+from ._session_access import require_session
 from ..storage import SessionRecord, StorageBase
 from ..workspace_manager import WorkspaceManagerBase
 from ..._logging import logger
 from ...tool import BackendBase
+from ...tool._builtin._backend import OpenedFile
 from ...workspace import WorkspaceBase
 
 #: Ceilings on one upload. Peak memory is a chunk per concurrent
@@ -140,18 +145,10 @@ class WorkspaceStatus(BaseModel):
     """Where a session is pointed, and the git state of that place."""
 
     workdir: str = Field(
-        description=(
-            "Absolute path of the workspace root. Backend-dependent — a "
-            "host directory locally, a fixed path inside the sandbox "
-            "otherwise — so the client cannot derive it."
-        ),
+        description="Logical Agent workspace path in the personal space (~)."
     )
     cwd: str = Field(
-        description=(
-            "Absolute path the session is focused on, resolved from "
-            ":attr:`SessionConfig.cwd`. Equals :attr:`workdir` when that "
-            "is unset."
-        ),
+        description="Logical directory selected for file browsing."
     )
     git: GitStatus | None = Field(
         default=None,
@@ -243,12 +240,12 @@ class WorkspaceService:
             session_id,
         )
         backend = workspace.get_backend()
-        # Stored as the user gave it: absolute, relative to a root the
-        # client cannot see, or unset for the root itself.
-        cwd = backend.abspath(record.config.cwd or "", cwd=workspace.workdir)
+        cwd = await self.resolve_path(
+            workspace, record.config.cwd or "", directory=True
+        )
         return WorkspaceStatus(
-            workdir=workspace.workdir,
-            cwd=cwd,
+            workdir=workspace.virtual_file_path(workspace.workdir),
+            cwd=workspace.virtual_file_path(cwd),
             git=await self._read_git(backend, cwd),
         )
 
@@ -272,74 +269,95 @@ class WorkspaceService:
         Raises:
             `HTTPException`: 404 when the session does not exist.
         """
-        session_record = await self._storage.get_session(
-            user_id,
-            agent_id,
-            session_id,
+        session_record = await require_session(
+            self._storage, user_id, agent_id, session_id
         )
-        if session_record is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Session {session_id!r} not found.",
+        try:
+            workspace = await self._workspace_manager.get_workspace(
+                user_id,
+                agent_id,
+                session_id,
+                session_record.config.workspace_id,
             )
-        workspace = await self._workspace_manager.get_workspace(
-            user_id,
-            agent_id,
-            session_id,
-            session_record.config.workspace_id,
-        )
+        except (PermissionError, ValueError) as exc:
+            raise HTTPException(
+                403, "Workspace is outside your personal space."
+            ) from exc
         return session_record, workspace
 
-    # ── Download tokens ────────────────────────────────────────────────
-    #
-    # A browser only streams to disk when it issues the request itself,
-    # and such a request carries no custom header — so the credential
-    # travels in the URL as a capability: this user, this path, briefly.
+    @staticmethod
+    async def resolve_path(
+        workspace: WorkspaceBase, path: str, *, directory: bool = False
+    ) -> str:
+        """The shared authorization boundary for every file API."""
+        try:
+            target = await workspace.resolve_file_path(path)
+        except (PermissionError, ValueError) as exc:
+            raise HTTPException(
+                403, "Path must stay inside your personal space."
+            ) from exc
+        if directory:
+            entry = await workspace.get_backend().stat(target)
+            if entry is None:
+                raise HTTPException(404, "Directory not found.")
+            if not entry.is_dir:
+                raise HTTPException(400, "Requested path is not a directory.")
+        return target
+
+    @staticmethod
+    @asynccontextmanager
+    async def open_file(
+        workspace: WorkspaceBase, path: str
+    ) -> AsyncIterator[OpenedFile]:
+        """Keep a confined file descriptor through metadata and body reads."""
+        try:
+            async with workspace.get_backend().open_read(
+                path, root=workspace.file_root
+            ) as opened:
+                yield opened
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "File not found.") from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                403, "File is outside the personal space or is a link."
+            ) from exc
+
+    async def directory_names(self, user_id: str) -> dict[str, str]:
+        """Friendly labels for the caller's own agent directories."""
+        return {
+            record.id: record.data.name
+            for record in await self._storage.list_agents(user_id)
+        }
+
+    @staticmethod
+    def _download_resource(agent_id: str, session_id: str, path: str) -> str:
+        return "workspace:" + json.dumps([agent_id, session_id, path])
 
     def sign_download_token(
         self,
         user_id: str,
+        agent_id: str,
+        session_id: str,
         path: str,
         ttl: int = DEFAULT_DOWNLOAD_TOKEN_TTL,
     ) -> tuple[str, int]:
-        """Mint a token authorizing one download.
-
-        Args:
-            user_id (`str`): The already-authenticated caller.
-            path (`str`): The path the token authorizes, verbatim as
-                the download request will send it.
-            ttl (`int`, defaults to 60): Seconds the token stays valid.
-
-        Returns:
-            `tuple[str, int]`: The token and its expiry as a Unix
-            timestamp.
-        """
+        """Sign a capability bound to this user, agent, session and path."""
         return sign_download_token(
             self._download_secret,
             user_id,
-            path,
+            self._download_resource(agent_id, session_id, path),
             ttl=ttl,
         )
 
-    def verify_download_token(self, token: str, path: str) -> str:
-        """Return the user a token was granted to, for this path.
-
-        The path is not read out of the token but re-derived from the
-        request, so a token for one file cannot be replayed against
-        another.
-
-        Args:
-            token (`str`): The token from the request.
-            path (`str`): The path the request is asking for.
-
-        Returns:
-            `str`: The user ID the token was minted for.
-
-        Raises:
-            `ValueError`: The token is malformed, expired, or does not
-                match.
-        """
-        return verify_download_token(self._download_secret, token, path)
+    def verify_download_token(
+        self, token: str, agent_id: str, session_id: str, path: str
+    ) -> str:
+        """Authenticate a download capability for exactly this resource."""
+        return verify_download_token(
+            self._download_secret,
+            token,
+            self._download_resource(agent_id, session_id, path),
+        )
 
     # ── Skill upload ───────────────────────────────────────────────────
     #
@@ -432,6 +450,13 @@ class WorkspaceService:
             agent_id (`str | None`, optional): The agent taking
                 ownership. ``None`` installs into the shared partition.
         """
+        backend = workspace.get_backend()
+        await self.resolve_path(
+            workspace,
+            backend.join_path(
+                workspace.workdir, "skills", agent_id or "default"
+            ),
+        )
         async with self._install_slots:
             await workspace.add_skill_archive(
                 stream,

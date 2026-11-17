@@ -3,7 +3,7 @@
 
 A browser-native fetch (an ``<iframe>`` PDF preview, an ``<img>`` tag,
 or a click-to-download navigation) carries no custom headers, so it
-cannot present ``X-User-ID``.  These helpers mint and verify a
+cannot present the Authorization header.  These helpers mint and verify a
 capability that rides in the URL instead: an HMAC over
 ``(expires_at, user_id, path)`` keyed by the app-wide download secret.
 
@@ -14,6 +14,7 @@ workspace files; it lives here as free functions so other routers
 ``app.state.download_secret`` without depending on the workspace
 service.
 """
+
 import base64
 import hashlib
 import hmac
@@ -48,6 +49,8 @@ def sign_download_token(
         `tuple[str, int]`:
             The token and its expiry as a Unix timestamp.
     """
+    if "\0" in user_id or "\0" in path:
+        raise ValueError("Invalid download identity or resource.")
     expires_at = int(time.time()) + ttl
     signature = _signature(secret, expires_at, user_id, path)
     token = (

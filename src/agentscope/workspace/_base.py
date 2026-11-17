@@ -511,6 +511,29 @@ class WorkspaceBase:
         state must override this.
         """
 
+    @property
+    def file_root(self) -> str:
+        """Outermost directory available to file browsing and downloads."""
+        return self.workdir
+
+    async def resolve_file_path(self, path: str) -> str:
+        """Resolve personal-space (~) or workspace-relative paths safely."""
+        backend = self.get_backend()
+        if path == "~" or path.startswith("~/"):
+            path = backend.join_path(
+                self.file_root, path[2:] if path != "~" else ""
+            )
+        return await backend.resolve_path(
+            path, root=self.file_root, cwd=self.workdir
+        )
+
+    def virtual_file_path(self, path: str) -> str:
+        """Display a path relative to the personal-space root."""
+        relative = (
+            self.get_backend().relpath(path, self.file_root).replace("\\", "/")
+        )
+        return "~" if relative == "." else f"~/{relative}"
+
     def get_backend(self) -> BackendBase:
         """Return the workspace's active filesystem/execution backend.
 

@@ -1,5 +1,5 @@
-import { Eye, EyeOff, Plus, Trash2, Pen } from 'lucide-react';
-import { useState, useEffect, useCallback } from 'react';
+import { Eye, EyeOff, Plus, Trash2, Pen, Loader2, FlaskConical } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
 
 import { credentialApi, embeddingModelApi, modelApi, ttsModelApi } from '@/api';
 import type {
@@ -9,6 +9,7 @@ import type {
 	ModelCard,
 	TTSModelCard,
 } from '@/api';
+import { LONGXIN_AI_LABEL, NEW_API_CREDENTIAL_TYPE } from '@/api/credential';
 import { CreateCredentialDialog } from '@/components/dialog/CreateCredentialDialog';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog';
 import { EditCredentialDialog } from '@/components/dialog/EditCredentialDialog';
@@ -47,6 +48,7 @@ type ModelTab = 'llm' | 'tts' | 'embedding';
 
 /** A row in the model table — one of the three card shapes. */
 type ModelRow = ModelCard | TTSModelCard | EmbeddingModelCard;
+type ModelCheck = { status: 'checking' | 'passed' | 'failed'; detail?: string };
 
 // ─── Masked value ─────────────────────────────────────────────────────────────
 
@@ -137,6 +139,7 @@ interface ModelTableProps {
 	models: ModelRow[];
 	/** Drives which numeric columns sit between MODEL and ACCEPTS. */
 	variant: ModelTab;
+	checks?: Record<string, ModelCheck>;
 }
 
 /**
@@ -147,7 +150,7 @@ interface ModelTableProps {
  * @param variant - Which column set applies.
  * @returns The bordered table plus its legend.
  */
-function ModelTable({ models, variant }: ModelTableProps) {
+function ModelTable({ models, variant, checks }: ModelTableProps) {
 	const { t } = useTranslation();
 	const isChat = variant === 'llm';
 	const isEmbedding = variant === 'embedding';
@@ -159,6 +162,7 @@ function ModelTable({ models, variant }: ModelTableProps) {
 					<TableHeader>
 						<TableRow className="border-border hover:bg-transparent">
 							<HeadCell>{t('credential.table.model')}</HeadCell>
+							{checks && <HeadCell>{t('credential.checkStatus')}</HeadCell>}
 							{(isChat || isEmbedding) && (
 								<HeadCell>{t('credential.table.context')}</HeadCell>
 							)}
@@ -198,6 +202,16 @@ function ModelTable({ models, variant }: ModelTableProps) {
 											)}
 										</span>
 									</TableCell>
+									{checks && (
+										<DataCell size="11.5">
+											<span title={checks[model.name]?.detail}>
+												{t(
+													'credential.check.' +
+														(checks[model.name]?.status ?? 'unchecked'),
+												)}
+											</span>
+										</DataCell>
+									)}
 									{(isChat || isEmbedding) && (
 										<DataCell size="11.5">
 											{context ? formatNumber(context) : '—'}
@@ -226,7 +240,7 @@ function ModelTable({ models, variant }: ModelTableProps) {
 				</Table>
 			</div>
 			<p className="mt-2.5 text-[11px] text-muted-foreground">
-				{t('credential.table.legend')}
+				{t(checks ? 'credential.configuredLegend' : 'credential.table.legend')}
 			</p>
 		</div>
 	);
@@ -239,26 +253,36 @@ interface DetailPanelProps {
 	schema: CredentialSchema | null;
 	onEdit: () => void;
 	onDelete: () => void;
+	onSetEnabled: (enabled: boolean) => Promise<void>;
 }
 
-function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps) {
+function DetailPanel({ credential, schema, onEdit, onDelete, onSetEnabled }: DetailPanelProps) {
 	const { t } = useTranslation();
 	const [models, setModels] = useState<ModelCard[]>([]);
 	const [ttsModels, setTtsModels] = useState<TTSModelCard[]>([]);
 	const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModelCard[]>([]);
 	const [modelsLoading, setModelsLoading] = useState(false);
 	const [tab, setTab] = useState<ModelTab>('llm');
+	const [checks, setChecks] = useState<Record<string, ModelCheck>>({});
+	const [checking, setChecking] = useState(false);
+	const [changingEnabled, setChangingEnabled] = useState(false);
+	const controllerRef = useRef<AbortController | null>(null);
+	const enabled = credential.enabled !== false;
 
 	const type = credential.data.type as string | undefined;
-	const shown = tab === 'llm' ? models : tab === 'tts' ? ttsModels : embeddingModels;
+	const modelsByTab = { llm: models, tts: ttsModels, embedding: embeddingModels };
+	const activeTab = modelsByTab[tab].length
+		? tab
+		: ((Object.keys(modelsByTab) as ModelTab[]).find((key) => modelsByTab[key].length) ??
+			'llm');
+	const shown = modelsByTab[activeTab];
 	const total = models.length + ttsModels.length + embeddingModels.length;
-
-	// A credential switch can land on a provider with no TTS models at
-	// all, which would leave the tab pointing at an empty list.
-	useEffect(() => setTab('llm'), [credential.id]);
 
 	useEffect(() => {
 		if (!type) return;
+		setChecks({});
+		setChecking(false);
+		let active = true;
 		setModelsLoading(true);
 		Promise.all([
 			modelApi
@@ -270,25 +294,79 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				.then((res) => res.models)
 				.catch(() => [] as TTSModelCard[]),
 			embeddingModelApi
-				.list(type)
+				.list(type, credential.id)
 				.then((res) => res.models)
 				.catch(() => [] as EmbeddingModelCard[]),
 		])
 			.then(([chatModels, tts, embeddings]) => {
+				if (!active) return;
 				setModels(chatModels);
 				setTtsModels(tts);
 				setEmbeddingModels(embeddings);
 			})
-			.finally(() => setModelsLoading(false));
-	}, [credential.id, type]);
+			.finally(() => {
+				if (active) setModelsLoading(false);
+			});
+		return () => {
+			active = false;
+			controllerRef.current?.abort();
+		};
+	}, [credential.id, credential.updated_at, type, enabled]);
+
+	const checkModels = async () => {
+		const controller = new AbortController();
+		controllerRef.current = controller;
+		setChecking(true);
+		setChecks(Object.fromEntries(models.map((model) => [model.name, { status: 'checking' }])));
+		let next = 0;
+		await Promise.all(
+			Array.from({ length: Math.min(3, models.length) }, async () => {
+				while (next < models.length && !controller.signal.aborted) {
+					const model = models[next++].name;
+					try {
+						const result = await credentialApi.checkModel(
+							credential.id,
+							model,
+							controller.signal,
+						);
+						if (!controller.signal.aborted)
+							setChecks((previous) => ({ ...previous, [model]: result }));
+					} catch (error) {
+						if (!controller.signal.aborted)
+							setChecks((previous) => ({
+								...previous,
+								[model]: {
+									status: 'failed',
+									detail: error instanceof Error ? error.message : '',
+								},
+							}));
+					}
+				}
+			}),
+		);
+		if (!controller.signal.aborted) setChecking(false);
+	};
+
+	const toggleEnabled = async () => {
+		setChangingEnabled(true);
+		try {
+			await onSetEnabled(!enabled);
+		} catch {
+			// The API client displays the error.
+		} finally {
+			setChangingEnabled(false);
+		}
+	};
 
 	// Fields to display: use schema properties order, skip id/type/const fields
 	const displayFields = schema
 		? Object.entries(schema.properties).filter(
-				([key, prop]) => key !== 'id' && key !== 'type' && prop.const === undefined,
+				([key, prop]) =>
+					!['id', 'type', 'enabled', 'embedding_models'].includes(key) &&
+					prop.const === undefined,
 			)
 		: Object.entries(credential.data)
-				.filter(([key]) => key !== 'id' && key !== 'type')
+				.filter(([key]) => !['id', 'type', 'enabled', 'embedding_models'].includes(key))
 				.map(
 					([key]) =>
 						[key, { title: key, writeOnly: false }] as [
@@ -307,7 +385,10 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 					<span className="text-foreground text-lg font-medium tracking-[-0.015em]">
 						{name}
 					</span>
-					<span className="font-mono text-text-data text-sm">{type}</span>
+					<span className="font-mono text-text-data text-sm">{LONGXIN_AI_LABEL}</span>
+					<Badge variant="secondary">
+						{t(enabled ? 'credential.enabled' : 'credential.disabled')}
+					</Badge>
 					{!credential.editable && (
 						<Badge variant="secondary" title={t('common.readOnlyTooltip')}>
 							{t('common.readOnly')}
@@ -316,20 +397,31 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				</div>
 				<div className="flex items-center gap-x-2 shrink-0">
 					<Button
-						size="icon-sm"
+						size="sm"
 						variant="ghost"
 						className="text-text-tertiary hover:text-foreground"
 						onClick={onEdit}
+						aria-label={t('dialog-credential-edit.title')}
 						disabled={!credential.editable}
 						tooltip={credential.editable ? undefined : t('common.readOnlyTooltip')}
 					>
 						<Pen />
+						{t('credential.editConfiguration')}
+					</Button>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={!credential.editable || changingEnabled}
+						onClick={toggleEnabled}
+					>
+						{t(enabled ? 'credential.disable' : 'credential.enable')}
 					</Button>
 					<Button
 						size="icon-sm"
 						variant="ghost"
-						className="text-text-tertiary hover:bg-destructive/8 hover:text-destructive"
+						className="text-text-tertiary hover:bg-destructive-alpha-8 hover:text-destructive"
 						onClick={onDelete}
+						aria-label={t('common.delete')}
 						disabled={!credential.editable}
 						tooltip={credential.editable ? undefined : t('common.readOnlyTooltip')}
 					>
@@ -376,29 +468,51 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 
 				{/* Available Models */}
 				<Tabs
-					value={tab}
+					value={activeTab}
 					onValueChange={(v) => setTab(v as ModelTab)}
 					className="gap-0 px-[18px] pb-6"
 				>
-					<div className="mt-[30px] mb-3 flex items-center justify-between">
+					<div className="mt-[30px] mb-3 flex flex-wrap items-center justify-between gap-2">
 						<span className="flex items-center gap-x-2 text-[13.5px] font-medium text-foreground">
-							{t('credential.availableModels')}
+							{t(
+								type === NEW_API_CREDENTIAL_TYPE
+									? 'credential.availableModels'
+									: 'credential.candidateModels',
+							)}
 							<span className="font-mono text-[11px] text-text-data">{total}</span>
 						</span>
+						{type === NEW_API_CREDENTIAL_TYPE && models.length > 0 && (
+							<Button
+								size="sm"
+								variant="outline"
+								tooltip={t('credential.checkHint')}
+								disabled={checking || !credential.editable || !enabled}
+								onClick={checkModels}
+							>
+								{checking ? (
+									<Loader2 className="size-3.5 animate-spin" />
+								) : (
+									<FlaskConical className="size-3.5" />
+								)}
+								{t('credential.checkModels')}
+							</Button>
+						)}
 						{/* Only worth a switch when there is a second list to switch to. */}
 						{(ttsModels.length > 0 || embeddingModels.length > 0) && (
 							<TabsList className="bg-surface-muted">
 								{/* Only the shadow is overridden here; the stock one
 							    is shadow-sm. */}
-								<TabsTrigger
-									value="llm"
-									className="px-2.5 text-[11.5px] text-muted-foreground group-data-[variant=default]/tabs-list:data-active:shadow-tab!"
-								>
-									{t('common.llm')}
-									<span className="font-mono text-[10px] text-text-data">
-										{models.length}
-									</span>
-								</TabsTrigger>
+								{models.length > 0 && (
+									<TabsTrigger
+										value="llm"
+										className="px-2.5 text-[11.5px] text-muted-foreground group-data-[variant=default]/tabs-list:data-active:shadow-tab!"
+									>
+										{t('common.llm')}
+										<span className="font-mono text-[10px] text-text-data">
+											{models.length}
+										</span>
+									</TabsTrigger>
+								)}
 								{ttsModels.length > 0 && (
 									<TabsTrigger
 										value="tts"
@@ -439,7 +553,11 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 					) : (
 						<>
 							<TabsContent value="llm">
-								<ModelTable models={models} variant="llm" />
+								<ModelTable
+									models={models}
+									variant="llm"
+									checks={type === NEW_API_CREDENTIAL_TYPE ? checks : undefined}
+								/>
 							</TabsContent>
 							<TabsContent value="tts">
 								<ModelTable models={ttsModels} variant="tts" />
@@ -459,179 +577,114 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 
 export const CredentialPage = () => {
 	const { t } = useTranslation();
-	const { credentials, loading, remove, refetch } = useCredentials();
+	const { credentials, loading, remove, setEnabled } = useCredentials();
 	const [schemas, setSchemas] = useState<CredentialSchema[]>([]);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [createOpen, setCreateOpen] = useState(false);
-	const [createDefaultType, setCreateDefaultType] = useState<string | undefined>();
 	const [editOpen, setEditOpen] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
+	const ordered = [...credentials].sort(
+		(left, right) =>
+			left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id),
+	);
 
 	useEffect(() => {
-		credentialApi.schemas().then((res) => setSchemas(res.schemas));
+		credentialApi.schemas().then(({ schemas }) => setSchemas(schemas));
 	}, []);
 
-	// Auto-select first credential
 	useEffect(() => {
-		if (!selectedId && credentials.length > 0) {
-			setSelectedId(credentials[0].id);
+		if (credentials.length > 0 && !credentials.some((entry) => entry.id === selectedId)) {
+			setSelectedId(
+				[...credentials].sort((left, right) =>
+					left.created_at.localeCompare(right.created_at),
+				)[0].id,
+			);
 		}
 	}, [credentials, selectedId]);
 
-	const selectedCredential = credentials.find((c) => c.id === selectedId) ?? null;
-	const selectedSchema = selectedCredential
-		? (schemas.find(
-				(s) =>
-					(s.properties.type?.const as string) ===
-					(selectedCredential.data.type as string),
-			) ?? null)
-		: null;
+	const selected = credentials.find((entry) => entry.id === selectedId);
+	const schema =
+		schemas.find((entry) => entry.properties.type?.const === selected?.data.type) ?? null;
 
-	// Group credentials by type, then list all schema types (even empty ones)
-	const groupedByType: Array<{ type: string; title: string; records: CredentialView[] }> =
-		schemas.map((s) => {
-			const type = s.properties.type?.const as string;
-			return {
-				type,
-				title: s.title,
-				records: credentials.filter((c) => c.data.type === type),
-			};
-		});
-
-	// Split providers so the user's actual configuration leads, and the
-	// (mostly empty) "add a provider" entries don't drown it out.
-	const configuredGroups = groupedByType.filter((g) => g.records.length > 0);
-	const totalConfigured = configuredGroups.reduce((n, g) => n + g.records.length, 0);
-
-	const handleOpenCreate = useCallback((type?: string) => {
-		setCreateDefaultType(type);
-		setCreateOpen(true);
-	}, []);
-
-	const handleDelete = useCallback(async () => {
-		if (!selectedCredential) return;
-		await remove(selectedCredential.id);
+	const handleDelete = async () => {
+		if (!selected) return;
+		await remove(selected.id);
 		setSelectedId(null);
-	}, [selectedCredential, remove]);
+	};
 
 	return (
-		<div className="flex h-full w-full p-2 gap-2">
-			{/* Left sidebar */}
+		<div className="flex h-full w-full gap-2 p-2">
 			<Sidebar collapsible="none" className="rounded-[22px]">
-				<SidebarHeader className={'flex flex-col p-[20px_18px_14px] gap-y-1'}>
-					<div className="text-xl font-medium tracking-[-0.02em] text-foreground">
+				<SidebarHeader className="flex flex-col gap-y-3 p-[20px_18px_14px]">
+					<div className="text-xl font-medium tracking-[-0.02em]">
 						{t('common.credential')}
 					</div>
-					<div className="text-text-tertiary text-xs">{t('credential.subtitle')}</div>
+					<p className="text-xs text-text-tertiary">{t('credential.subtitle')}</p>
+					<Button
+						variant="outline"
+						className="justify-start"
+						onClick={() => setCreateOpen(true)}
+					>
+						<Plus />
+						{t('credential.newConfiguration')}
+					</Button>
 				</SidebarHeader>
-				{/*<Separator />*/}
 				<SidebarContent>
 					{loading ? (
-						<div className="flex flex-col gap-y-2 p-4">
-							{Array.from({ length: 3 }).map((_, i) => (
-								<Skeleton key={i} className="h-8 rounded" />
-							))}
+						<div className="space-y-2 p-4">
+							<Skeleton className="h-8 rounded" />
 						</div>
-					) : groupedByType.length === 0 ? (
-						<Empty className="border-none py-8">
-							<EmptyHeader>
-								<EmptyTitle>{t('credential.noProviders')}</EmptyTitle>
-							</EmptyHeader>
-						</Empty>
 					) : (
-						<>
-							{/* Configured credentials lead — this is what the user actually set up. */}
-							{configuredGroups.length > 0 && (
-								<SidebarGroup className="mt-6 px-2 py-0">
-									<SidebarGroupLabel className="justify-between">
-										{t('credential.configured')}
-										<span className="text-[10px] text-text-data font-mono">
-											{totalConfigured}
-										</span>
-									</SidebarGroupLabel>
-									<SidebarGroupContent>
-										{configuredGroups.map(({ type, title, records }) => (
-											<SidebarGroup key={type} className="mt-3 px-0 py-0">
-												<SidebarGroupLabel>{title}</SidebarGroupLabel>
-												<SidebarGroupContent>
-													<SidebarMenu>
-														{records.map((rec) => {
-															const name =
-																(rec.data.name as
-																	| string
-																	| undefined) ?? rec.id;
-															return (
-																<SidebarMenuItem key={rec.id}>
-																	<SidebarMenuButton
-																		isActive={
-																			selectedId === rec.id
-																		}
-																		onClick={() =>
-																			setSelectedId(rec.id)
-																		}
-																	>
-																		<span className="min-w-0 flex-1 truncate">
-																			{name}
-																		</span>
-																		{!rec.editable && (
-																			<Badge
-																				variant="secondary"
-																				className="text-[10px] px-1 py-0"
-																				title={t(
-																					'common.readOnlyTooltip',
-																				)}
-																			>
-																				{t(
-																					'common.readOnly',
-																				)}
-																			</Badge>
-																		)}
-																	</SidebarMenuButton>
-																</SidebarMenuItem>
-															);
-														})}
-													</SidebarMenu>
-												</SidebarGroupContent>
-											</SidebarGroup>
-										))}
-									</SidebarGroupContent>
-								</SidebarGroup>
-							)}
-
-							{/* Add credential — every provider is an entry point (including
-							    configured ones, to add more under the same provider). */}
-							<SidebarGroup className="mt-5 px-2 py-0">
-								<SidebarGroupLabel>{t('credential.addProvider')}</SidebarGroupLabel>
-								<SidebarGroupContent>
-									<SidebarMenu>
-										{groupedByType.map(({ type, title }) => (
-											<SidebarMenuItem key={type}>
-												<SidebarMenuButton
-													onClick={() => handleOpenCreate(type)}
-												>
-													<Plus />
-													<span className="min-w-0 flex-1 truncate">
-														{title}
-													</span>
-												</SidebarMenuButton>
-											</SidebarMenuItem>
-										))}
-									</SidebarMenu>
-								</SidebarGroupContent>
-							</SidebarGroup>
-						</>
+						<SidebarGroup className="mt-4 px-2">
+							<SidebarGroupLabel className="justify-between">
+								{LONGXIN_AI_LABEL}
+								<span className="font-mono text-xs">{credentials.length}</span>
+							</SidebarGroupLabel>
+							<SidebarGroupContent>
+								<SidebarMenu>
+									{ordered.map((entry) => (
+										<SidebarMenuItem key={entry.id}>
+											<SidebarMenuButton
+												isActive={entry.id === selectedId}
+												onClick={() => setSelectedId(entry.id)}
+												title={entry.id}
+											>
+												<span className="min-w-0 flex-1 truncate">
+													{String(entry.data.name || entry.id)}
+												</span>
+												{entry.enabled === false && (
+													<Badge variant="secondary">
+														{t('credential.disabled')}
+													</Badge>
+												)}
+												{entry.data.type !== NEW_API_CREDENTIAL_TYPE && (
+													<Badge variant="secondary">
+														{t('credential.legacy')}
+													</Badge>
+												)}
+												{!entry.editable && (
+													<Badge variant="secondary">
+														{t('common.readOnly')}
+													</Badge>
+												)}
+											</SidebarMenuButton>
+										</SidebarMenuItem>
+									))}
+								</SidebarMenu>
+							</SidebarGroupContent>
+						</SidebarGroup>
 					)}
 				</SidebarContent>
 			</Sidebar>
-
-			{/* Right detail */}
-			<main className="flex-1 min-h-0 overflow-hidden rounded-[22px] bg-card shadow-panel">
-				{selectedCredential ? (
+			<main className="min-h-0 flex-1 overflow-hidden rounded-[22px] bg-card shadow-panel">
+				{selected ? (
 					<DetailPanel
-						credential={selectedCredential}
-						schema={selectedSchema}
+						key={selected.id}
+						credential={selected}
+						schema={schema}
 						onEdit={() => setEditOpen(true)}
 						onDelete={() => setDeleteOpen(true)}
+						onSetEnabled={(enabled) => setEnabled(selected.id, enabled)}
 					/>
 				) : (
 					<div className="flex h-full items-center justify-center">
@@ -646,30 +699,26 @@ export const CredentialPage = () => {
 					</div>
 				)}
 			</main>
-
-			{/* Dialogs */}
 			<CreateCredentialDialog
 				open={createOpen}
 				onOpenChange={setCreateOpen}
-				defaultType={createDefaultType}
-				onCreated={() => refetch()}
+				defaultType={NEW_API_CREDENTIAL_TYPE}
+				onCreated={(id) => setSelectedId(id)}
 			/>
-			{selectedCredential && (
+			{selected && (
 				<>
 					<EditCredentialDialog
+						key={selected.id}
 						open={editOpen}
 						onOpenChange={setEditOpen}
-						credential={selectedCredential}
-						onUpdated={() => refetch()}
+						credential={selected}
 					/>
 					<DeleteDialog
 						open={deleteOpen}
 						onOpenChange={setDeleteOpen}
 						title={t('common.deleteTitle', {
 							entity: t('credential.deleteEntity'),
-							name:
-								(selectedCredential.data.name as string | undefined) ??
-								selectedCredential.id,
+							name: selected.data.name || selected.id,
 						})}
 						description={t('common.deleteDescription')}
 						onConfirm={handleDelete}

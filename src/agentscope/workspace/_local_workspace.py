@@ -78,6 +78,7 @@ class LocalWorkspace(WorkspaceBase):
         self,
         *,
         workdir: str,
+        file_root: str | None = None,
         workspace_id: str | None = None,
         default_mcps: list[MCPClient] | None = None,
         skill_paths: list[str] | None = None,
@@ -90,6 +91,8 @@ class LocalWorkspace(WorkspaceBase):
             workdir (`str`):
                 Filesystem path to the workspace root. Created on
                 demand. Always resolved to an absolute path.
+            file_root (`str | None`, optional):
+                Account file boundary. Defaults to the workspace directory.
             workspace_id (`str | None`, optional):
                 Existing workspace identifier to adopt. ``None``
                 generates a fresh UUID.
@@ -118,6 +121,7 @@ class LocalWorkspace(WorkspaceBase):
 
         # ── serializable config ─────────────────────────────────
         self.workdir = os.path.abspath(workdir)
+        self._file_root = os.path.abspath(file_root or workdir)
         self.instructions = instructions.format(
             backend="local",
             workdir=self.workdir,
@@ -128,6 +132,11 @@ class LocalWorkspace(WorkspaceBase):
 
         self._skill_lock = asyncio.Lock()
         self._mcp_lock = asyncio.Lock()
+
+    @property
+    def file_root(self) -> str:
+        """The owning account's personal space."""
+        return self._file_root
 
     @property
     def _python_command(self) -> str:

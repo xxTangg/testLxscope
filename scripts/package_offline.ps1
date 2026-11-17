@@ -8,6 +8,8 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $ComposeFile = Join-Path $ProjectRoot "docker-compose.yml"
 $BackendImage = "testlxscope-intranet:latest"
 $WebUiImage = "testlxscope-web-ui:latest"
+$SandboxImage = "testlxscope-sandbox:latest"
+$EgressImage = "testlxscope-egress:latest"
 $RedisImage = "redis:7-alpine"
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $OutputDir = Join-Path $ProjectRoot "dist\agentscope-offline-$Stamp"
@@ -28,7 +30,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 if (-not $SkipBuild) {
-    Invoke-Docker @("compose", "-f", $ComposeFile, "build", "agentscope", "web-ui")
+    Invoke-Docker @("compose", "-f", $ComposeFile, "--profile", "build", "build", "agentscope", "web-ui", "user-sandbox", "egress")
 }
 try {
     Invoke-Docker @("image", "inspect", $RedisImage) | Out-Null
@@ -42,12 +44,16 @@ Invoke-Docker @(
     $TarFile
     $BackendImage
     $WebUiImage
+    $SandboxImage
+    $EgressImage
     $RedisImage
 )
 
 $Platforms = @(
     $BackendImage
     $WebUiImage
+    $SandboxImage
+    $EgressImage
     $RedisImage
 ) | ForEach-Object {
     (Invoke-Docker @("image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", $_)).Trim()
@@ -61,6 +67,9 @@ $Platform = $UniquePlatforms[0]
 Copy-Item $ComposeFile (Join-Path $OutputDir "docker-compose.yml")
 Copy-Item (Join-Path $ProjectRoot ".env.example") (Join-Path $OutputDir ".env.example")
 Copy-Item (Join-Path $ProjectRoot "OPS_DEPLOYMENT.md") (Join-Path $OutputDir "OPS_DEPLOYMENT.md")
+$DocsDir = Join-Path $OutputDir "docs"
+New-Item -ItemType Directory -Force -Path $DocsDir | Out-Null
+Copy-Item (Join-Path $ProjectRoot "docs\user-file-space.md") (Join-Path $DocsDir "user-file-space.md")
 
 $Hash = (Get-FileHash -Algorithm SHA256 $TarFile).Hash
 @{
@@ -68,6 +77,8 @@ $Hash = (Get-FileHash -Algorithm SHA256 $TarFile).Hash
     images = @(
         $BackendImage
         $WebUiImage
+        $SandboxImage
+        $EgressImage
         $RedisImage
     )
     platform = $Platform

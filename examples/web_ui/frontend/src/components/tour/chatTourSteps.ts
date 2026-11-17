@@ -10,7 +10,7 @@ export const buildChatTour = (t: TFunction): Tour => ({
 			icon: null,
 			title: t('tour.createAgent.title'),
 			content: t('tour.createAgent.content'),
-			selector: '#tour-create-agent',
+			selector: '#tour-agent-select',
 			side: 'bottom',
 			showControls: false,
 			pointerPadding: 8,

@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
 """The session data class for storage."""
+
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import deprecated
 
 from ._base import _RecordBase
@@ -248,18 +255,12 @@ class SessionConfig(BaseModel):
     """Session configuration — set at creation, updatable via PATCH."""
 
     workspace_id: str
-    """Authoritative workspace binding for the session.
-
-    Populated at session creation — either from an explicit
-    ``workspace_id`` on ``CreateSessionRequest`` (used by team
-    invite/borrow flows) or from
-    :meth:`WorkspaceManagerBase.assign_workspace_id` under the
-    manager's isolation policy. Consumed verbatim by chat,
-    ``list_mcps``, and team tools; also the cache key for
-    :meth:`WorkspaceManagerBase.get_workspace`."""
+    """Server-assigned workspace identity, also reused by authorized team flows."""
 
     name: str = Field(
-        default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        default_factory=lambda: datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S",
+        ),
         description="Display name for the session.",
     )
     """The session display name."""
@@ -269,32 +270,9 @@ class SessionConfig(BaseModel):
 
     cwd: str | None = Field(
         default=None,
-        description=(
-            "Directory the session is focused on — absolute, or "
-            "relative to the workspace root. ``None`` means the root."
-        ),
+        description="Logical directory within the account personal space. None selects the Agent workspace.",
     )
-    """The directory this session is currently focused on.
-
-    Not confined to the workspace root, matching
-    ``GET /workspace/directories``: on a sandboxed backend the
-    reachable filesystem *is* the sandbox, and on a local one the
-    caller is already trusted with the host. Nothing is validated on
-    write — the value only names a place to look, so a path that has
-    gone missing surfaces when something tries to read it rather than
-    blocking the change.
-
-    A relative value stays relative on purpose: the workspace root is
-    backend-dependent (a host directory for :class:`LocalWorkspace`, a
-    fixed in-sandbox path for the container backends) and only
-    resolvable asynchronously, so denormalising it here would go stale
-    the moment a session moves between backends. Resolve with
-    ``backend.abspath(cwd, cwd=workspace.workdir)`` at the point of use
-    — which handles both forms.
-
-    Purely a viewing anchor: it does **not** change where ``Bash``,
-    ``Glob`` or ``Grep`` execute.
-    """
+    """Validated file-browsing anchor; does not merge Agent state or memory."""
 
     chat_model_config: ChatModelConfig | None = None
     """The chat model config. None means no model has been configured yet."""
@@ -317,6 +295,33 @@ class SessionConfig(BaseModel):
 
 class SessionRecord(_RecordBase):
     """The session record."""
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+    )
+    """Creation instant in UTC, including its offset in API responses."""
+
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+    )
+    """Last update instant in UTC."""
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def _normalize_timestamp(cls, value: datetime) -> datetime:
+        """Read legacy UTC records and SQL's naive UTC columns consistently.
+
+        The Docker service historically ran in UTC but omitted the offset.
+        Treat those timestamps as UTC, independently of the reader's zone.
+        """
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    @field_serializer("created_at", "updated_at", when_used="json")
+    def _serialize_timestamp(self, value: datetime) -> str:
+        """Include UTC even immediately after SQL stamps a naive value."""
+        return self._normalize_timestamp(value).isoformat()
 
     user_id: str
     """The user id."""

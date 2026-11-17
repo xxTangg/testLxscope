@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """The example script to start the agent service."""
+
 import os
 import sys
 
@@ -18,7 +19,7 @@ from agentscope.app.hub import BuiltinSkillHub, ClawSkillHub, GitHubMCPHub
 from agentscope.app.message_bus import RedisMessageBus
 from agentscope.app.rag.knowledge_base_manager import CollectionPerKbManager
 from agentscope.app.storage import RedisStorage
-from agentscope.app.workspace_manager import LocalWorkspaceManager
+from agentscope.app.workspace_manager import UserWorkspaceManager
 from agentscope.mcp import MCPClient, StdioMCPConfig
 from agentscope.middleware import AgenticMemoryMiddleware, MiddlewareBase
 from agentscope.permission import PermissionContext, PermissionMode
@@ -36,27 +37,22 @@ from agentscope.workspace import WorkspaceBase
 
 from auth import load_auth_from_env
 
-playwright_mcp_command = os.getenv("PLAYWRIGHT_MCP_COMMAND", "npx")
-playwright_browsers_path = os.getenv(
-    "PLAYWRIGHT_BROWSERS_PATH",
-    "/ms-playwright",
-)
-playwright_mcp_args = (
-    ["--headless", "--browser", "chromium", "--no-sandbox"]
-    if playwright_mcp_command == "playwright-mcp"
-    else ["-y", "@playwright/mcp@latest"]
-)
-
 default_mcps = [
     MCPClient(
         name="playwright",
         mcp_config=StdioMCPConfig(
-            command=playwright_mcp_command,
-            args=playwright_mcp_args,
-            # Explicitly pass this to the child process. Some Playwright MCP
-            # launch paths do not reliably inherit the container environment
-            # and otherwise fall back to /root/.cache/ms-playwright.
-            env={"PLAYWRIGHT_BROWSERS_PATH": playwright_browsers_path},
+            command="playwright-mcp",
+            args=[
+                "--headless",
+                "--browser",
+                "chromium",
+                "--no-sandbox",
+                "--isolated",
+                "--proxy-server",
+                "http://egress:3128",
+                "--executable-path",
+                "/usr/local/bin/agentscope-chromium",
+            ],
         ),
         is_stateful=True,
     ),
@@ -103,12 +99,10 @@ app = create_app(
         port=int(os.getenv("REDIS_PORT", "6379")),
         password=os.getenv("REDIS_PASSWORD") or None,
     ),
-    workspace_manager=LocalWorkspaceManager(
-        basedir=os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "workspaces",
-        ),
-        # The default MCP servers that will be added into the workspace
+    workspace_manager=UserWorkspaceManager(
+        image=os.environ["USER_SANDBOX_IMAGE"],
+        prefix=os.environ["USER_SANDBOX_PREFIX"],
+        egress_container=os.environ["USER_SANDBOX_EGRESS"],
         default_mcps=default_mcps,
     ),
     # Knowledge base feature — backed by a persistent local Qdrant store. The
@@ -139,7 +133,11 @@ app = create_app(
     skill_hubs=[
         BuiltinSkillHub(
             os.path.join(
-                os.path.dirname(__file__), "..", "..", "assets", "builtin_skills",
+                os.path.dirname(__file__),
+                "..",
+                "..",
+                "assets",
+                "builtin_skills",
             ),
         ),
         ClawSkillHub(api_token=os.getenv("CLAWHUB_API_TOKEN")),

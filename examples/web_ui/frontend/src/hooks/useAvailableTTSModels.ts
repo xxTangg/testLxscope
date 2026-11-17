@@ -26,6 +26,7 @@ export function useAvailableTTSModels() {
 
 			await Promise.all(
 				credentials.map(async (credential) => {
+					if (credential.enabled === false) return;
 					const type = credential.data.type as string | undefined;
 					if (!type) return;
 					if (!result[type]) result[type] = [];

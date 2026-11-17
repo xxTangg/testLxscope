@@ -45,6 +45,7 @@ live in different databases in the future. The service is the **only**
 component that touches both in the same call. Storage code never
 imports the bus; bus code never imports storage.
 """
+
 import asyncio
 from enum import StrEnum
 
@@ -367,6 +368,14 @@ class SessionService:
                 ``False`` otherwise. Mirrors
                 :meth:`StorageBase.delete_session`.
         """
+        record = await self._storage.get_session(user_id, agent_id, session_id)
+        if (
+            record is None
+            or record.user_id != user_id
+            or record.agent_id != agent_id
+        ):
+            return False
+
         # Identify all bus-purge targets before storage mutates anything.
         worker_sids = await self._team_worker_session_ids(
             user_id,
@@ -376,8 +385,7 @@ class SessionService:
         all_sids = [session_id, *worker_sids]
 
         # Resolve the workspace binding while the record still exists.
-        record = await self._storage.get_session(user_id, agent_id, session_id)
-        workspace_id = record.config.workspace_id if record else None
+        workspace_id = record.config.workspace_id
 
         # Clean leader-side subagent HITL projections before storage
         # cascades remove the records we need to resolve roles from.

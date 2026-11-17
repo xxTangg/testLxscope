@@ -2,7 +2,6 @@ import { ApiError, buildApiUrl, client, getAccessToken } from './client';
 import type { UploadProgress } from './knowledgeBase';
 import type {
 	AddFromLibraryResponse,
-	AddSkillRequest,
 	DirectoryListing,
 	WorkspaceStatus,
 	MCPClient,
@@ -129,15 +128,7 @@ function uploadSkillXhr(
 }
 
 export const workspaceApi = {
-	/**
-	 * List one directory level inside the session's workspace.
-	 *
-	 * `path` may be absolute or relative to the workspace root; empty
-	 * lists the root itself. Not confined to the root — for a sandboxed
-	 * backend the reachable filesystem is the sandbox, and for a local
-	 * one the caller is already trusted with the host. The response
-	 * echoes the resolved absolute path.
-	 */
+	/** Browse personal-space (~) or Agent-relative paths. */
 	directories: (agentId: string, sessionId: string, path = '') =>
 		client.get<DirectoryListing>('/workspace/directories', {
 			agent_id: agentId,
@@ -214,16 +205,6 @@ export const workspaceApi = {
 	skill: {
 		list: (agentId: string, sessionId: string) =>
 			client.get<Skill[]>('/workspace/skill', { agent_id: agentId, session_id: sessionId }),
-
-		/**
-		 * @deprecated The path is resolved on the server. Use `upload`
-		 * for a local folder or `addFromLibrary` for an installed skill.
-		 */
-		add: (agentId: string, sessionId: string, body: AddSkillRequest) =>
-			client.post<void>('/workspace/skill', body, {
-				agent_id: agentId,
-				session_id: sessionId,
-			}),
 
 		/** Uploads a picked folder as a skill, reporting send progress. */
 		upload: (agentId: string, sessionId: string, files: File[], options: UploadOptions = {}) =>

@@ -1,15 +1,16 @@
-import { clearAccessToken, client, setAccessToken } from './client';
+import { client, setAccessToken } from './client';
 
 export interface AuthUser {
 	id: string;
 	username: string;
+	is_admin: boolean;
+	enabled: boolean;
 }
 
 export interface LoginResponse {
 	access_token: string;
-	token_type: 'bearer';
-	expires_in: number;
 	user: AuthUser;
+	show_tour: boolean;
 }
 
 export interface DailyTokenUsage {
@@ -44,7 +45,7 @@ async function authenticate(
 		silent: true,
 	});
 	setAccessToken(response.access_token);
-	return response.user;
+	return response;
 }
 
 export const authApi = {
@@ -53,11 +54,14 @@ export const authApi = {
 		authenticate('/auth/register', username, password),
 	me: () => client.get<AuthUser>('/auth/me', undefined, { silent: true }),
 	usage: () => client.get<TokenUsage>('/auth/usage', undefined, { silent: true }),
-	logout: async () => {
-		try {
-			await client.post<void>('/auth/logout', undefined, undefined, { silent: true });
-		} finally {
-			clearAccessToken();
-		}
-	},
+};
+
+export const userAdminApi = {
+	list: () => client.get<AuthUser[]>('/admin/users', undefined, { silent: true }),
+	resetPassword: (username: string, password: string) =>
+		client.patch<AuthUser>('/admin/users/password', { password }, { username }, { silent: true }),
+	setStatus: (username: string, enabled: boolean) =>
+		client.patch<AuthUser>('/admin/users/status', { enabled }, { username }, { silent: true }),
+	usage: (username: string, days: 7 | 30) =>
+		client.get<TokenUsage>('/admin/users/usage', { username, days: String(days) }, { silent: true }),
 };

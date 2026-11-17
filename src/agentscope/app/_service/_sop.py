@@ -4,6 +4,7 @@
 A step's result is read back from the run state, where its agent's
 submit tool wrote it.
 """
+
 import asyncio
 import json
 import inspect
@@ -32,7 +33,6 @@ from ...event import (
     UserInterruptEvent,
 )
 from ...message import Msg, TextBlock, UserMsg
-from ..._utils._common import _generate_id
 from ...sop import (
     SOP,
     SOPAttempt,
@@ -107,12 +107,14 @@ class SessionSOPStep(SOPStepBase):
 
     async def reply_stream(  # pylint: disable=invalid-overridden-method
         self,
-        inputs: Msg
-        | list[Msg]
-        | UserConfirmResultEvent
-        | UserInterruptEvent
-        | ExternalExecutionResultEvent
-        | None,
+        inputs: (
+            Msg
+            | list[Msg]
+            | UserConfirmResultEvent
+            | UserInterruptEvent
+            | ExternalExecutionResultEvent
+            | None
+        ),
         state: SOPStepRunState,
     ) -> AsyncGenerator[Any, None]:
         """Hand one turn to one session and read back what it filed.
@@ -228,10 +230,12 @@ class SessionSOPStep(SOPStepBase):
             self.record(
                 state,
                 False,
-                "The reviewer ended its turn without a verdict."
-                if reviewing
-                else "Your turn ended without submitting anything, so the "
-                "step has nothing to show for it.",
+                (
+                    "The reviewer ended its turn without a verdict."
+                    if reviewing
+                    else "Your turn ended without submitting anything, so the "
+                    "step has nothing to show for it."
+                ),
                 "sop",
             )
         except TimeoutError:
@@ -273,7 +277,10 @@ class SessionSOPStep(SOPStepBase):
                 "\nSubmitHandover.outputs must match this JSON Schema:\n"
                 + json.dumps(self._data.output_schema, ensure_ascii=False)
             )
-        text += "\nPublish any files needed downstream with SubmitHandover.artifact_paths."
+        text += (
+            "\nPublish files needed downstream with "
+            "SubmitHandover.artifact_paths."
+        )
         return [UserMsg(name="sop", content=text), *state.given]
 
     def _question(
@@ -411,7 +418,9 @@ class SOPService:
 
         # Minted rather than assigned: ``assign_workspace_id`` may reuse
         # the agent's workspace across runs, breaking the grain.
-        shared = _generate_id()
+        shared = await self._workspace_manager.new_workspace_id(
+            user_id=user_id
+        )
         run.state.workspace_id = shared
         try:
             for key, agent_id in agents.items():
@@ -420,7 +429,9 @@ class SOPService:
                 workspace_id = (
                     shared
                     if data.workspace_grain is SOPWorkspaceGrain.RUN
-                    else _generate_id()
+                    else await self._workspace_manager.new_workspace_id(
+                        user_id=user_id
+                    )
                 )
                 session = await self._storage.upsert_session(
                     user_id=user_id,
@@ -512,7 +523,7 @@ class SOPService:
                 )
 
     async def recover(self) -> None:
-        """Schedule unfinished runs after a process restart or missed wakeup."""
+        """Schedule unfinished runs after restart or missed wakeup."""
         for record in await self._storage.list_recoverable_sop_runs():
             if record.state.cancelled:
                 continue
@@ -799,7 +810,8 @@ class SOPService:
                 for key in descendants
             ):
                 raise ValueError(
-                    "Downstream results exist; choose rerun node and descendants."
+                    "Downstream results exist; "
+                    "choose rerun node and descendants."
                 )
             affected = {node_id} | descendants
             if any(
@@ -807,7 +819,8 @@ class SOPService:
                 for key in affected
             ):
                 raise ValueError(
-                    "Wait for affected running nodes to stop before rerunning them."
+                    "Wait for affected running nodes to stop "
+                    "before rerunning them."
                 )
             for key in affected:
                 node = record.state.steps[by_id[key]]
@@ -853,7 +866,7 @@ class SOPService:
         return record
 
     async def cancel_run(self, user_id: str, run_id: str) -> SOPRunRecord:
-        """Fence future writes before stopping the coordinator and its workers."""
+        """Fence writes before stopping the coordinator and workers."""
 
         owned = await self._storage.get_sop_run(user_id, run_id)
         if owned is None:

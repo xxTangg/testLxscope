@@ -366,7 +366,7 @@ export function SOPEditor({
 			>
 				<DialogContent
 					showCloseButton={false}
-					className="flex h-[min(84dvh,780px)] max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[960px]"
+					className="flex h-[min(84vh,780px)] max-h-[calc(100vh-2rem)] flex-col gap-0 overflow-hidden p-0 supports-[height:100dvh]:h-[min(84dvh,780px)] supports-[height:100dvh]:max-h-[calc(100dvh-2rem)] sm:max-w-[960px]"
 					onEscapeKeyDown={(event) => {
 						if (busy) event.preventDefault();
 					}}
@@ -453,7 +453,7 @@ export function SOPEditor({
 								{error && (
 									<p
 										role="alert"
-										className="rounded-lg bg-destructive/5 px-3 py-2.5 text-xs text-destructive"
+										className="rounded-lg bg-destructive-alpha-5 px-3 py-2.5 text-xs text-destructive"
 									>
 										{error}
 									</p>
@@ -465,9 +465,9 @@ export function SOPEditor({
 											{t('sop.basicsHint')}
 										</p>
 									</div>
-									<Field label={t('common.name')}>
+									<Field label={t('sop.name')}>
 										<Input
-											aria-label={t('common.name')}
+											aria-label={t('sop.name')}
 											autoFocus
 											value={editor.name}
 											onChange={(event) =>

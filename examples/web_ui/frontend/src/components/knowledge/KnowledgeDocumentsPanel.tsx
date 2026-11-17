@@ -59,7 +59,7 @@ function StatusBadge({ phase }: { phase: UploadPhase }) {
 			case 'ready':
 				return 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400';
 			case 'error':
-				return 'bg-destructive/10 text-destructive';
+				return 'bg-destructive-alpha-10 text-destructive';
 			case 'cancelled':
 				return 'bg-muted text-muted-foreground';
 			case 'queued':
@@ -69,7 +69,7 @@ function StatusBadge({ phase }: { phase: UploadPhase }) {
 			case 'chunking':
 			case 'indexing':
 			default:
-				return 'bg-primary/10 text-primary';
+				return 'bg-primary-alpha-10 text-primary';
 		}
 	})();
 	return (
@@ -442,7 +442,7 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 				onDragLeave={onDragLeave}
 				className={cn(
 					'rounded-lg border border-dashed transition-colors',
-					dragOver ? 'border-primary bg-primary/5' : 'border-border bg-transparent',
+					dragOver ? 'border-primary bg-primary-alpha-5' : 'border-border bg-transparent',
 				)}
 			>
 				{rows.length === 0 && loading ? (

@@ -1,25 +1,23 @@
 # -*- coding: utf-8 -*-
 """Workspace router — manage MCP clients and skills on a workspace."""
+
 import asyncio
 import mimetypes
-import shutil
-import tempfile
 from pathlib import Path
-from urllib.parse import quote
+from typing import AsyncIterator
 
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
-    Header,
     HTTPException,
     Query,
     Request,
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import ValidationError
 from starlette.background import BackgroundTask
 
@@ -31,6 +29,7 @@ from ..deps import (
 )
 from ..hub import BuiltinSkillHub, SkillHubBase
 from .._service import WorkspaceService, WorkspaceStatus
+from .._service._file_response import file_headers
 from .._service._download_token import DEFAULT_DOWNLOAD_TOKEN_TTL
 from .._service._workspace import SkillUploadError, UploadManifest
 from .._service._builtin_skills import (
@@ -41,12 +40,10 @@ from .._service._builtin_skills import (
 from ..storage import MCPRecord, StorageBase
 from ...mcp import MCPClient
 from ...message import TextBlock
-from ...rag import ParserBase
 from ...skill import Skill
 from ._schema import (
     AddFromLibraryRequest,
     AddFromLibraryResponse,
-    AddSkillRequest,
     AddSkillsFromLibraryRequest,
     DirectoryEntry,
     DirectoryListing,
@@ -54,6 +51,7 @@ from ._schema import (
     MCPClientStatus,
     ToolInfo,
 )
+from ..._logging import logger
 from ..._utils._common import _describe_exception
 
 workspace_router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -253,33 +251,6 @@ async def list_skills(
 
 
 @workspace_router.post(
-    "/skill",
-    status_code=status.HTTP_201_CREATED,
-    deprecated=True,
-)
-async def add_skill(
-    body: AddSkillRequest,
-    agent_id: str = Query(...),
-    session_id: str = Query(...),
-    user_id: str = Depends(get_current_user_id),
-    workspace_service: WorkspaceService = Depends(get_workspace_service),
-) -> None:
-    """Add a skill to the session's workspace from the given path.
-
-    Deprecated: the path is resolved on the server, which only means
-    anything for a single-host deployment. Use ``POST /skill/upload``
-    to send a folder, or ``POST /skill/from-library`` to install one
-    the user already has.
-    """
-    workspace = await workspace_service.resolve(
-        user_id,
-        agent_id,
-        session_id,
-    )
-    await workspace.add_skill(body.skill_path, agent_id=agent_id)
-
-
-@workspace_router.post(
     "/skill/upload",
     status_code=status.HTTP_201_CREATED,
 )
@@ -367,13 +338,15 @@ async def add_skills_from_library(
             continue
         hub = skill_hubs.get(record.hub_id or "")
         if hub is None:
-            failed[
-                record.name
-            ] = f"Its hub {record.hub_id!r} is no longer registered."
+            failed[record.name] = (
+                f"Its hub {record.hub_id!r} is no longer registered."
+            )
             continue
         try:
             if isinstance(hub, BuiltinSkillHub) and (
-                await activate_workspace_builtin_skill(workspace, agent_id, record)
+                await activate_workspace_builtin_skill(
+                    workspace, agent_id, record
+                )
             ):
                 added.append(record.name)
                 continue
@@ -434,29 +407,21 @@ async def list_workspace_directory(
     path: str = Query(
         default="",
         description=(
-            "Absolute path, or one relative to the workspace root. "
-            "Empty lists the workspace root itself."
+            "Personal-space path (~), or a path relative to this Agent. "
+            "Empty opens the Agent workspace."
         ),
     ),
     user_id: str = Depends(get_current_user_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ) -> DirectoryListing:
-    """List one directory level, reachable from a session's workspace.
-
-    Paths are not confined to the workspace root: for a sandboxed
-    backend the reachable filesystem is the sandbox, and for a local
-    one the caller is already trusted with the host.
-
-    The resolved absolute path comes back alongside the entries, so a
-    caller browsing with relative paths can still show where it is.
-    """
+    """List a directory inside the authenticated account personal space."""
     workspace = await workspace_service.resolve(
         user_id,
         agent_id,
         session_id,
     )
     backend = workspace.get_backend()
-    target = backend.abspath(path, cwd=workspace.workdir)
+    target = await workspace_service.resolve_path(workspace, path)
 
     entry = await backend.stat(target)
     if entry is None:
@@ -470,19 +435,35 @@ async def list_workspace_directory(
             detail="Requested path is a file, not a directory.",
         )
 
-    # One call for the whole directory: asking per entry would be one
-    # round trip each on a sandboxed backend, times three attributes.
-    return DirectoryListing(
-        path=target,
-        entries=[
-            DirectoryEntry(
-                name=entry.name,
-                is_dir=entry.is_dir,
-                size_bytes=entry.size_bytes,
-                updated_at=entry.mtime,
+    virtual_path = workspace.virtual_file_path(target)
+    labels = (
+        await workspace_service.directory_names(user_id)
+        if virtual_path == "~/agents"
+        else {}
+    )
+    entries = []
+    for child in await backend.scandir(target):
+        try:
+            await workspace.resolve_file_path(
+                backend.join_path(target, child.name)
             )
-            for entry in await backend.scandir(target)
-        ],
+        except (PermissionError, ValueError):
+            continue
+        entries.append(
+            DirectoryEntry(
+                name=child.name,
+                display_name=labels.get(child.name, child.name),
+                is_dir=child.is_dir,
+                size_bytes=child.size_bytes,
+                updated_at=child.mtime,
+            )
+        )
+    return DirectoryListing(
+        path=virtual_path,
+        parent_path=(
+            None if virtual_path == "~" else virtual_path.rsplit("/", 1)[0]
+        ),
+        entries=entries,
     )
 
 
@@ -524,30 +505,15 @@ async def create_download_token(
     user_id: str = Depends(get_current_user_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ) -> DownloadTokenResponse:
-    """Mint a short-lived token for a browser-native download.
-
-    The browser writes the response straight to disk only when it
-    issues the request itself, and such a request carries no custom
-    header — hence a credential in the URL. Fetching with ``X-User-ID``
-    instead works but holds the whole file in the tab.
-
-    Minting depends on the normal identity, so whatever replaces
-    ``X-User-ID`` guards this too.
-
-    The session is resolved here only to fail early: the download is a
-    browser navigation, so an error there surfaces as a raw error page
-    rather than something the UI can show.
-    """
-    await workspace_service.resolve(
+    """Authorize the file before issuing a session-bound download token."""
+    workspace = await workspace_service.resolve(user_id, agent_id, session_id)
+    target = await workspace_service.resolve_path(workspace, path)
+    async with workspace_service.open_file(workspace, target):
+        pass
+    token, expires_at = workspace_service.sign_download_token(
         user_id,
         agent_id,
         session_id,
-    )
-    # Signed verbatim, not resolved: the download verifies against the
-    # query string it receives, and resolving needs a user the token
-    # has not been read yet to supply.
-    token, expires_at = workspace_service.sign_download_token(
-        user_id,
         path,
         ttl=_PREVIEW_TOKEN_TTL if preview else DEFAULT_DOWNLOAD_TOKEN_TTL,
     )
@@ -560,22 +526,13 @@ async def read_workspace_file(
     session_id: str = Query(...),
     path: str = Query(
         ...,
-        description="Absolute path, or one relative to the workspace root.",
+        description="Personal-space (~) or Agent-relative file path.",
     ),
     download: bool = Query(
         default=False,
         description="Force a Content-Disposition attachment.",
     ),
-    token: str
-    | None = Query(
-        default=None,
-        description=(
-            "A token from ``POST /workspace/files/download-token``, "
-            "accepted in place of the ``X-User-ID`` header so a browser "
-            "navigation can download the file directly."
-        ),
-    ),
-    x_user_id: str | None = Header(default=None),
+    token: str = Query(..., description="Signed file download capability."),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ) -> StreamingResponse:
     """Stream one file out of a session's workspace.
@@ -584,21 +541,12 @@ async def read_workspace_file(
     process is shared, so one large download must not be able to
     exhaust it for everyone else.
     """
-    if token is not None:
-        try:
-            user_id = workspace_service.verify_download_token(token, path)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(e),
-            ) from e
-    elif x_user_id:
-        user_id = x_user_id
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-User-ID header or download token is required.",
+    try:
+        user_id = workspace_service.verify_download_token(
+            token, agent_id, session_id, path
         )
+    except ValueError as exc:
+        raise HTTPException(401, "Invalid or expired download token.") from exc
 
     workspace = await workspace_service.resolve(
         user_id,
@@ -606,37 +554,36 @@ async def read_workspace_file(
         session_id,
     )
     backend = workspace.get_backend()
-    target = backend.abspath(path, cwd=workspace.workdir)
+    target = await workspace_service.resolve_path(workspace, path)
     basename = backend.basename(target) or "download"
 
-    entry = await backend.stat(target)
-    if entry is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File not found.",
-        )
-    if entry.is_dir:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Requested path is a directory, not a file.",
-        )
+    context = workspace_service.open_file(workspace, target)
+    opened = await context.__aenter__()
+    closed = False
 
-    headers: dict[str, str] = {"X-Content-Type-Options": "nosniff"}
-    # Lets the browser show real download progress instead of a
-    # spinner of unknown length; omitted when the backend cannot stat.
-    if entry.size_bytes is not None:
-        headers["Content-Length"] = str(entry.size_bytes)
-    if download:
-        headers[
-            "Content-Disposition"
-        ] = f"attachment; filename*=UTF-8''{quote(basename)}"
+    async def close() -> None:
+        nonlocal closed
+        if not closed:
+            closed = True
+            await context.__aexit__(None, None, None)
 
+    async def body() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in opened.stream:
+                yield chunk
+        finally:
+            await close()
+
+    media_type = (
+        mimetypes.guess_type(basename)[0] or "application/octet-stream"
+    )
+    headers = file_headers(basename, media_type, download)
+    headers["Content-Length"] = str(opened.size)
     return StreamingResponse(
-        backend.read_stream(target),
-        media_type=(
-            mimetypes.guess_type(basename)[0] or "application/octet-stream"
-        ),
+        body(),
+        media_type=media_type,
         headers=headers,
+        background=BackgroundTask(close),
     )
 
 
@@ -644,7 +591,14 @@ _MAX_WORKSPACE_PREVIEW_BYTES = 10 * 1024 * 1024
 _MAX_WORKSPACE_PREVIEW_CHARS = 500_000
 _MAX_WORKSPACE_PREVIEW_PDF_BYTES = 50 * 1024 * 1024
 _OFFICE_PREVIEW_TIMEOUT_SECONDS = 45
-_OFFICE_PREVIEW_EXTENSIONS = {".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"}
+_OFFICE_PREVIEW_EXTENSIONS = {
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+}
 _OFFICE_PREVIEW_SEMAPHORE = asyncio.Semaphore(1)
 
 
@@ -655,7 +609,7 @@ async def preview_workspace_file_pdf(
     path: str = Query(...),
     user_id: str = Depends(get_current_user_id),
     workspace_service: WorkspaceService = Depends(get_workspace_service),
-) -> FileResponse:
+) -> Response:
     """Render an Office file to a temporary PDF for inline preview."""
     workspace = await workspace_service.resolve(
         user_id,
@@ -663,7 +617,7 @@ async def preview_workspace_file_pdf(
         session_id,
     )
     backend = workspace.get_backend()
-    target = backend.abspath(path, cwd=workspace.workdir)
+    target = await workspace_service.resolve_path(workspace, path)
     basename = backend.basename(target) or "preview"
     extension = Path(basename).suffix.lower()
     if extension not in _OFFICE_PREVIEW_EXTENSIONS:
@@ -672,128 +626,52 @@ async def preview_workspace_file_pdf(
             detail="This file type does not support Office preview.",
         )
 
-    entry = await backend.stat(target)
-    if entry is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File not found.",
-        )
-    if entry.is_dir:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Requested path is a directory, not a file.",
-        )
-    if (
-        entry.size_bytes is not None
-        and entry.size_bytes > _MAX_WORKSPACE_PREVIEW_BYTES
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File is too large for an inline preview.",
-        )
+    import uuid
 
-    soffice = shutil.which("soffice")
-    if soffice is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Office preview is unavailable on this server.",
-        )
-
-    temp_dir = Path(tempfile.mkdtemp(prefix="agentscope-office-preview-"))
-    source_name = Path(basename).name
-    source_path = temp_dir / source_name
-    output_dir = temp_dir / "output"
-    profile_dir = temp_dir / "profile"
-    output_dir.mkdir()
-    profile_dir.mkdir()
-
+    temporary = backend.join_path("/tmp", "preview-" + uuid.uuid4().hex)
+    source = backend.join_path(temporary, "source" + extension)
+    output = backend.join_path(temporary, "output")
     try:
-        total_bytes = 0
-        with source_path.open("wb") as source_file:
-            async for chunk in backend.read_stream(target):
-                total_bytes += len(chunk)
-                if total_bytes > _MAX_WORKSPACE_PREVIEW_BYTES:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail="File is too large for an inline preview.",
-                    )
-                source_file.write(chunk)
-
-        async with _OFFICE_PREVIEW_SEMAPHORE:
-            process = await asyncio.create_subprocess_exec(
-                soffice,
-                f"-env:UserInstallation={profile_dir.as_uri()}",
-                "--headless",
-                "--nologo",
-                "--nodefault",
-                "--norestore",
-                "--convert-to",
-                "pdf",
-                "--outdir",
-                str(output_dir),
-                str(source_path),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                _, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=_OFFICE_PREVIEW_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError as exc:
-                process.kill()
-                await process.communicate()
+        async with workspace_service.open_file(workspace, target) as opened:
+            if opened.size > _MAX_WORKSPACE_PREVIEW_BYTES:
                 raise HTTPException(
-                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                    detail="Document preview conversion timed out.",
-                ) from exc
-            except asyncio.CancelledError:
-                process.kill()
-                await process.communicate()
-                raise
-
-        pdf_path = output_dir / f"{source_path.stem}.pdf"
-        if process.returncode != 0 or not pdf_path.is_file():
-            logger.warning(
-                "LibreOffice could not render workspace file %r: %s",
-                basename,
-                (stderr or b"").decode("utf-8", errors="replace")[-2000:],
+                    413, "File is too large for an inline preview."
+                )
+            await backend.write_stream(source, opened.stream)
+        await backend.exec_shell(["mkdir", "-p", output])
+        async with _OFFICE_PREVIEW_SEMAPHORE:
+            result = await backend.exec_shell(
+                [
+                    "soffice",
+                    "-env:UserInstallation=file://" + temporary + "/profile",
+                    "--headless",
+                    "--nologo",
+                    "--nodefault",
+                    "--norestore",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    output,
+                    source,
+                ],
+                timeout=_OFFICE_PREVIEW_TIMEOUT_SECONDS,
             )
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="This Office file could not be rendered for preview.",
-            )
-        pdf_size = pdf_path.stat().st_size
-        if pdf_size == 0:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="This Office file could not be rendered for preview.",
-            )
-        if pdf_size > _MAX_WORKSPACE_PREVIEW_PDF_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Rendered preview is too large to display inline.",
-            )
-
-        pdf_name = f"{Path(source_name).stem}.pdf"
-        return FileResponse(
-            pdf_path,
+        if not result.ok():
+            raise HTTPException(422, "Office preview conversion failed.")
+        pdf_path = backend.join_path(output, "source.pdf")
+        async with backend.open_read(pdf_path, root=temporary) as opened:
+            if opened.size > _MAX_WORKSPACE_PREVIEW_PDF_BYTES:
+                raise HTTPException(413, "Rendered preview is too large.")
+            content = b"".join([chunk async for chunk in opened.stream])
+        return Response(
+            content,
             media_type="application/pdf",
-            filename=pdf_name,
-            content_disposition_type="inline",
-            headers={
-                "Cache-Control": "no-store",
-                "X-Content-Type-Options": "nosniff",
-            },
-            background=BackgroundTask(
-                shutil.rmtree,
-                str(temp_dir),
-                ignore_errors=True,
+            headers=file_headers(
+                Path(basename).stem + ".pdf", "application/pdf", False
             ),
         )
-    except BaseException:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        raise
+    finally:
+        await backend.delete_path(temporary)
 
 
 @workspace_router.get("/files/preview-text")
@@ -818,7 +696,7 @@ async def preview_workspace_file_text(
         session_id,
     )
     backend = workspace.get_backend()
-    target = backend.abspath(path, cwd=workspace.workdir)
+    target = await workspace_service.resolve_path(workspace, path)
     basename = backend.basename(target) or "preview"
     entry = await backend.stat(target)
     if entry is None:
@@ -842,7 +720,9 @@ async def preview_workspace_file_text(
 
     extension = Path(basename).suffix.lower()
     parsers = getattr(request.app.state, "knowledge_parsers", None) or []
-    parser_list = list(parsers.values()) if isinstance(parsers, dict) else parsers
+    parser_list = (
+        list(parsers.values()) if isinstance(parsers, dict) else parsers
+    )
     parser = next(
         (
             candidate
@@ -853,13 +733,13 @@ async def preview_workspace_file_text(
     )
 
     payload = bytearray()
-    async for chunk in backend.read_stream(target):
-        if len(payload) + len(chunk) > _MAX_WORKSPACE_PREVIEW_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="File is too large for an inline preview.",
-            )
-        payload.extend(chunk)
+    async with workspace_service.open_file(workspace, target) as opened:
+        async for chunk in opened.stream:
+            if len(payload) + len(chunk) > _MAX_WORKSPACE_PREVIEW_BYTES:
+                raise HTTPException(
+                    413, "File is too large for an inline preview."
+                )
+            payload.extend(chunk)
 
     if parser is not None:
         try:
@@ -919,7 +799,9 @@ async def preview_workspace_file_text(
     for offset in range(0, len(sample), 16):
         row = sample[offset : offset + 16]
         hex_bytes = " ".join(f"{byte:02x}" for byte in row)
-        readable = "".join(chr(byte) if 32 <= byte < 127 else "." for byte in row)
+        readable = "".join(
+            chr(byte) if 32 <= byte < 127 else "." for byte in row
+        )
         lines.append(f"{offset:08x}  {hex_bytes:<47}  {readable}")
     return {
         "text": "\n".join(lines) or "(empty file)",

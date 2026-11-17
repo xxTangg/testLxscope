@@ -204,12 +204,12 @@ export function ChannelForm({ value, onChange, agents, channelTypes, mode }: Pro
 		if (!value.chatModelConfig) return null;
 		const items = groups[value.chatModelConfig.type];
 		if (!items) return null;
-		for (const { models } of items) {
-			const card = models.find((m) => m.name === value.chatModelConfig!.model);
-			if (card) return card;
-		}
-		return null;
-	}, [groups, value.chatModelConfig?.type, value.chatModelConfig?.model]);
+		return (
+			items
+				.find((entry) => entry.credential.id === value.chatModelConfig!.credential_id)
+				?.models.find((model) => model.name === value.chatModelConfig!.model) ?? null
+		);
+	}, [groups, value.chatModelConfig]);
 
 	return (
 		<FieldGroup className="[&>[data-orientation=horizontal]>:last-child]:w-48">

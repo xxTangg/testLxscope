@@ -1,7 +1,6 @@
 import {
 	BookText,
 	BotMessageSquare,
-	Cable,
 	Calendars,
 	Compass,
 	KeyRound,
@@ -11,6 +10,7 @@ import {
 	Repeat2,
 	Settings,
 	UserRound,
+	UsersRound,
 } from 'lucide-react';
 import { useOnborda } from 'onborda';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -49,7 +49,7 @@ export function AppSidebar() {
 	const location = useLocation();
 	const { t } = useTranslation();
 	const { startOnborda } = useOnborda();
-	const { user, logout } = useAuth();
+	const { user, clearAutoTour, logout } = useAuth();
 
 	const handleStartTour = () => {
 		if (!location.pathname.startsWith('/chat')) {
@@ -58,20 +58,18 @@ export function AppSidebar() {
 			sessionStorage.setItem('force_tour', '1');
 			navigate('/chat');
 		} else {
+			clearAutoTour();
 			startOnborda(CHAT_TOUR_NAME);
 		}
 	};
 
-	const handleLogout = async () => {
-		await logout();
+	const handleLogout = () => {
+		logout();
 		navigate('/login', { replace: true });
 	};
 
 	return (
-		<Sidebar
-			collapsible="none"
-			className="w-[calc(4rem+1px)]! bg-transparent"
-		>
+		<Sidebar collapsible="none" className="w-[calc(4rem+1px)]! bg-transparent">
 			<SidebarHeader>
 				<AgentScope className="mt-2 size-8" />
 			</SidebarHeader>
@@ -108,26 +106,13 @@ export function AppSidebar() {
 							</SidebarMenuItem>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									tooltip={{ children: t('common.sop'), hidden: false }}
+									tooltip={{ children: t('sop.title'), hidden: false }}
 									isActive={location.pathname === '/sop'}
 									onClick={() => navigate('/sop')}
 									className={iconButtonClassName}
 								>
 									<ListChecks />
-									<span className={iconLabelClassName}>{t('common.sop')}</span>
-								</SidebarMenuButton>
-							</SidebarMenuItem>
-							<SidebarMenuItem>
-								<SidebarMenuButton
-									tooltip={{ children: t('common.channel'), hidden: false }}
-									isActive={location.pathname === '/channel'}
-									onClick={() => navigate('/channel')}
-									className={iconButtonClassName}
-								>
-									<Cable />
-									<span className={iconLabelClassName}>
-										{t('common.channel')}
-									</span>
+									<span className={iconLabelClassName}>{t('sop.title')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 						</SidebarMenu>
@@ -203,7 +188,9 @@ export function AppSidebar() {
 										children: user?.username ?? t('auth.accountCenter'),
 										hidden: false,
 									}}
-									isActive={location.pathname === '/account'}
+									isActive={['/account', '/admin/users'].includes(
+										location.pathname,
+									)}
 									className={iconButtonClassName}
 								>
 									<UserRound />
@@ -226,19 +213,22 @@ export function AppSidebar() {
 									<UserRound />
 									{t('auth.accountAndUsage')}
 								</DropdownMenuItem>
+								{user?.is_admin && (
+									<DropdownMenuItem onSelect={() => navigate('/admin/users')}>
+										<UsersRound />
+										{t('userAdmin.title')}
+									</DropdownMenuItem>
+								)}
 								<DropdownMenuItem onSelect={() => navigate('/setup')}>
 									<Settings />
 									{t('common.settings')}
 								</DropdownMenuItem>
 								<DropdownMenuSeparator />
-								<DropdownMenuItem onSelect={() => void handleLogout()}>
+								<DropdownMenuItem onSelect={handleLogout}>
 									<Repeat2 />
 									{t('auth.switchAccount')}
 								</DropdownMenuItem>
-								<DropdownMenuItem
-									variant="destructive"
-									onSelect={() => void handleLogout()}
-								>
+								<DropdownMenuItem variant="destructive" onSelect={handleLogout}>
 									<LogOut />
 									{t('auth.logout')}
 								</DropdownMenuItem>

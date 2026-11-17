@@ -3,11 +3,18 @@
 from typing import Literal, Type, TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from pydantic import ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    PositiveInt,
+    SecretStr,
+    field_validator,
+)
 
 from ._base import CredentialBase
 
 if TYPE_CHECKING:
+    from ..embedding import EmbeddingModelCard, OpenAIEmbeddingModel
     from ..model import ChatModelBase, ModelCard
 
 
@@ -19,11 +26,20 @@ class NewAPICredential(CredentialBase):
     type: Literal["newapi_credential"] = "newapi_credential"
     api_key: SecretStr = Field(description="The gateway API key.")
     base_url: str = Field(
+        default="http://lxcoreaihub.cnecc.com:5000/v1",
         description="Gateway API base URL, for example https://gateway.example.com/v1.",
     )
     models: str = Field(
-        description="Model IDs enabled for this key, one per line or separated by commas.",
+        default="",
+        description=(
+            "Enabled chat model IDs separated by newlines, "
+            "English or Chinese commas."
+        ),
         json_schema_extra={"format": "textarea"},
+    )
+    embedding_models: dict[str, PositiveInt] = Field(
+        default_factory=dict,
+        description="Legacy embedding model dimensions saved by older clients.",
     )
     context_size: int = Field(
         default=32768,
@@ -43,21 +59,35 @@ class NewAPICredential(CredentialBase):
         parsed = urlsplit(value)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             raise ValueError("Enter a valid http:// or https:// API base URL.")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError("Base URL cannot contain credentials, a query, or a fragment.")
+        if parsed.username is not None or parsed.query or parsed.fragment:
+            raise ValueError(
+                "Base URL cannot contain credentials, a query, or a fragment."
+            )
+        # Accessing .port also validates the port syntax and range.
+        if parsed.port == 0:
+            raise ValueError("Base URL must use a valid port.")
         return value
 
-    @field_validator("models")
+    @field_validator("embedding_models")
     @classmethod
-    def validate_models(cls, value: str) -> str:
-        if not cls._model_names(value):
-            raise ValueError("Enter at least one model ID.")
+    def validate_embedding_models(
+        cls, value: dict[str, int]
+    ) -> dict[str, int]:
+        if any(not name or name != name.strip() for name in value):
+            raise ValueError("Enter a valid embedding model ID.")
         return value
 
     @staticmethod
     def _model_names(value: str) -> list[str]:
-        parts = value.replace("\r", "\n").replace(",", "\n").split("\n")
-        return list(dict.fromkeys(name for part in parts if (name := part.strip())))
+        parts = (
+            value.replace("\r", "\n")
+            .replace(",", "\n")
+            .replace("，", "\n")
+            .split("\n")
+        )
+        return list(
+            dict.fromkeys(name for part in parts if (name := part.strip()))
+        )
 
     @classmethod
     def get_chat_model_class(cls) -> Type["ChatModelBase"]:
@@ -66,8 +96,24 @@ class NewAPICredential(CredentialBase):
         return OpenAIChatModel
 
     @classmethod
-    def get_embedding_model_class(cls) -> None:
-        return None
+    def get_embedding_model_class(cls) -> Type["OpenAIEmbeddingModel"]:
+        from ..embedding import OpenAIEmbeddingModel
+
+        return OpenAIEmbeddingModel
+
+    def configured_embedding_models(self) -> list["EmbeddingModelCard"]:
+        """List the enabled embedding models with their gateway dimensions."""
+        from ..embedding import EmbeddingModelCard
+
+        return [
+            EmbeddingModelCard(
+                name=name,
+                label=name,
+                dimensions=dimensions,
+                pass_dimensions=False,
+            )
+            for name, dimensions in self.embedding_models.items()
+        ]
 
     @classmethod
     def get_tts_model_classes(cls) -> list:
@@ -91,11 +137,18 @@ class NewAPICredential(CredentialBase):
             "type": "object",
             "properties": {
                 key: properties[key]
-                for key in ("max_tokens", "temperature", "top_p", "parallel_tool_calls")
+                for key in (
+                    "max_tokens",
+                    "temperature",
+                    "top_p",
+                    "parallel_tool_calls",
+                )
             },
             "required": [],
         }
-        parameter_schema["properties"]["max_tokens"]["maximum"] = self.output_size
+        parameter_schema["properties"]["max_tokens"][
+            "maximum"
+        ] = self.output_size
         return [
             ModelCard(
                 name=name,

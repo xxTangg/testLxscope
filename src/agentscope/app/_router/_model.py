@@ -43,7 +43,11 @@ async def list_models(
     if credential_cls is NewAPICredential:
         if body.credential_id is None:
             return ListModelsResponse(models=[], total=0)
-        record = await access.resolve_credential(user_id, body.credential_id)
+        record = await access.resolve_credential(
+            user_id,
+            body.credential_id,
+            allow_disabled=True,
+        )
         credential = CredentialFactory.from_dict(record.data)
         if not isinstance(credential, NewAPICredential):
             raise HTTPException(

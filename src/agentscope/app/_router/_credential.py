@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Credential router — CRUD endpoints for API key credentials."""
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import ValidationError
 
 from ..access import ResourceKind
 from ..deps import (
@@ -15,15 +16,148 @@ from ._schema import (
     ListCredentialSchemasResponse,
     UpdateCredentialRequest,
 )
+from ._schema._credential import (
+    CheckCredentialModelRequest,
+    CheckCredentialModelResponse,
+    NewAPIEmbeddingProbeRequest,
+    NewAPIEmbeddingProbeResponse,
+    NewAPIGatewayRequest,
+    SetCredentialEnabledRequest,
+)
 from .._service import CredentialView, ResourceAccessService
+from .._service._newapi import NewAPIGateway
 from ..storage import StorageBase
-from ...credential import CredentialFactory
+from ...credential import CredentialBase, CredentialFactory, NewAPICredential
 
 credential_router = APIRouter(
     prefix="/credential",
     tags=["credential"],
     responses={404: {"description": "Not found"}},
 )
+
+
+def _saved_newapi_key(data: dict, base_url: str) -> str:
+    if (
+        data.get("type") != "newapi_credential"
+        or data.get("base_url") != base_url
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Enter the API key for this gateway address.",
+        )
+    return data["api_key"]
+
+
+async def _resolve_newapi_gateway(
+    body: NewAPIGatewayRequest,
+    user_id: str,
+    access: ResourceAccessService,
+) -> NewAPIGateway:
+    key = body.api_key.get_secret_value().strip() if body.api_key else ""
+    if not key and body.credential_id:
+        _, record = await access.resolve_for_edit(
+            user_id,
+            ResourceKind.CREDENTIAL,
+            body.credential_id,
+        )
+        ResourceAccessService.ensure_credential_enabled(record)
+        key = _saved_newapi_key(record.data, body.base_url)
+    if not key:
+        raise HTTPException(
+            status_code=400, detail="Enter the gateway API key."
+        )
+
+    return NewAPIGateway(body.base_url, key)
+
+
+@credential_router.post(
+    "/newapi/embedding-dimensions",
+    response_model=NewAPIEmbeddingProbeResponse,
+)
+async def probe_newapi_embedding(
+    body: NewAPIEmbeddingProbeRequest,
+    user_id: str = Depends(get_current_user_id),
+    access: ResourceAccessService = Depends(get_resource_access_service),
+) -> NewAPIEmbeddingProbeResponse:
+    """Measure a model's native dimension with one short embedding request."""
+    gateway = await _resolve_newapi_gateway(body, user_id, access)
+    return NewAPIEmbeddingProbeResponse(
+        dimensions=await gateway.embedding_dimensions(body.model),
+    )
+
+
+@credential_router.post(
+    "/{credential_id}/check-model",
+    response_model=CheckCredentialModelResponse,
+)
+async def check_credential_model(
+    credential_id: str,
+    body: CheckCredentialModelRequest,
+    user_id: str = Depends(get_current_user_id),
+    access: ResourceAccessService = Depends(get_resource_access_service),
+) -> CheckCredentialModelResponse:
+    """Test one explicitly configured chat model without changing its record."""
+    _, record = await access.resolve_for_edit(
+        user_id,
+        ResourceKind.CREDENTIAL,
+        credential_id,
+    )
+    ResourceAccessService.ensure_credential_enabled(record)
+    credential = _validate_credential(record.data)
+    if not isinstance(credential, NewAPICredential):
+        raise HTTPException(
+            status_code=400,
+            detail="Model checks require a gateway credential.",
+        )
+    if body.model not in credential._model_names(credential.models):
+        raise HTTPException(
+            status_code=400,
+            detail="The model is not configured on this credential.",
+        )
+    gateway = NewAPIGateway(
+        credential.base_url,
+        credential.api_key.get_secret_value(),
+    )
+    try:
+        await gateway.check_chat_model(body.model)
+        return CheckCredentialModelResponse(model=body.model, status="passed")
+    except HTTPException as exc:
+        return CheckCredentialModelResponse(
+            model=body.model,
+            status="failed",
+            detail=str(exc.detail),
+        )
+
+
+@credential_router.patch(
+    "/{credential_id}/enabled",
+    response_model=CredentialView,
+)
+async def set_credential_enabled(
+    credential_id: str,
+    body: SetCredentialEnabledRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+    access: ResourceAccessService = Depends(get_resource_access_service),
+) -> CredentialView:
+    """Preserve the credential's configuration while changing its availability."""
+    owner_id, record = await access.resolve_for_edit(
+        user_id,
+        ResourceKind.CREDENTIAL,
+        credential_id,
+    )
+    credential = _validate_credential({**record.data, "enabled": body.enabled})
+    credential.id = credential_id
+    await storage.upsert_credential(owner_id, credential)
+    return await access.get_resource(user_id, "credential", credential_id)
+
+
+def _validate_credential(data: dict) -> CredentialBase:
+    try:
+        return CredentialFactory.from_dict(data)
+    except ValidationError as exc:
+        detail = ". ".join(error["msg"] for error in exc.errors())
+        raise HTTPException(status_code=422, detail=detail) from exc
 
 
 @credential_router.get(
@@ -98,9 +232,11 @@ async def create_credential(
     Returns:
         `CreateCredentialResponse`: The server-assigned credential identifier.
     """
+    data = body.data.copy()
+    data.pop("id", None)
     credential_id = await storage.upsert_credential(
         user_id,
-        CredentialFactory.from_dict(body.data),
+        _validate_credential(data),
     )
     return CreateCredentialResponse(credential_id=credential_id)
 
@@ -135,31 +271,43 @@ async def update_credential(
         `HTTPException`: 404 if the credential is not visible to the
             caller; 403 if visible but only readable.
     """
-    owner_id, _ = await access.resolve_for_edit(
+    owner_id, previous = await access.resolve_for_edit(
         user_id,
         ResourceKind.CREDENTIAL,
         credential_id,
     )
 
-    credential = CredentialFactory.from_dict(body.data)
+    data = body.data.copy()
+    if data.get("type") == "newapi_credential" and not data.get("api_key"):
+        try:
+            base_url = NewAPICredential.validate_base_url(
+                data.get("base_url", "")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422, detail="Enter a valid gateway address."
+            ) from exc
+        data["api_key"] = _saved_newapi_key(previous.data, base_url)
+    credential = _validate_credential(data)
+    if isinstance(credential, NewAPICredential):
+        connection_changed = credential.base_url != previous.data.get(
+            "base_url"
+        ) or credential.api_key.get_secret_value() != previous.data.get(
+            "api_key"
+        )
+        if connection_changed:
+            if (
+                credential._model_names(credential.models)
+                and not body.models_confirmed
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The gateway changed. Confirm the chat models for the new connection.",
+                )
+            credential.embedding_models = {}
     credential.id = credential_id
     await storage.upsert_credential(owner_id, credential)
-    # ``resolve_for_edit`` proved the record existed under ``owner_id``
-    # and the upsert above just wrote back to the same key, so the read
-    # is a value refresh, not an existence check. If it still comes back
-    # empty (e.g. a concurrent delete), surface an explicit server error
-    # rather than relying on ``assert`` (which ``-O`` strips).
-    updated = await storage.get_credential(owner_id, credential_id)
-    if updated is None:
-        raise RuntimeError(
-            f"Credential {credential_id!r} for owner {owner_id!r} "
-            "disappeared immediately after a successful upsert.",
-        )
-    # Only reachable via ``resolve_for_edit``, so the caller has edit
-    # permission by construction.
-    return CredentialView.model_validate(
-        {**updated.model_dump(), "editable": True},
-    )
+    return await access.get_resource(user_id, "credential", credential_id)
 
 
 @credential_router.delete(
