@@ -256,6 +256,7 @@
 	"textInput": {
 		"toComplete": "to complete",
 		"attach": "Attach file",
+		"dropAttachments": "Drop files to attach",
 		"attachNotSupported": "This model does not support file attachments",
 		"send": "Send",
 		"stop": "Stop generating",
@@ -301,7 +302,7 @@
 			"rate_limit": "Rate limit or quota exceeded — please try again later.",
 			"invalid_request": "The request to the model was rejected as invalid.",
 			"upstream": "The upstream model service returned an error.",
-			"connection": "Could not reach the model service — network error or timeout.",
+			"connection": "Could not reach the model service. Try again later or contact your administrator.",
 			"internal": "An unexpected internal error occurred.",
 			"setup": "The session could not be prepared — check the agent's model, tools and knowledge bases.",
 			"unknown": "The reply failed with an unknown error."
@@ -526,6 +527,12 @@
 		"title": "Delete knowledge base",
 		"description": "This will permanently delete the knowledge base \"{{name}}\" and all of its indexed documents. This action cannot be undone."
 	},
+	"diagnostic": {
+		"reference": "Diagnostic ID",
+		"copy": "Copy diagnostic ID",
+		"copied": "Copied",
+		"copyFailed": "Could not copy automatically. Select and copy the ID."
+	},
 	"credential": {
 		"noProviders": "No providers available",
 		"selectHint": "No credential selected",
@@ -540,6 +547,27 @@
 		"enable": "Enable",
 		"disable": "Disable",
 		"connectionChanged": "The URL or API key changed. Select the chat models for this connection again, or leave the list empty.",
+		"connectionCheck": {
+			"button": "Test connection",
+			"checking": "Testing connection…",
+			"passed": "Gateway connection succeeded · {{ms}} ms",
+			"errors": {
+				"dns": "The server could not resolve the gateway hostname. Check the hostname or contact your administrator.",
+				"connection_refused": "The gateway refused the connection. Check the port and whether the gateway is running.",
+				"certificate": "The gateway's certificate could not be verified. Contact your administrator.",
+				"tls": "The server could not establish a secure connection to the gateway. Check the HTTPS address or contact your administrator.",
+				"timeout": "The connection or response timed out. Try again or contact your administrator.",
+				"network_error": "The server could not connect to the AI gateway. Check the address or contact your administrator.",
+				"authentication": "The gateway responded but rejected the API key (401). Check the key.",
+				"permission": "The gateway responded but denied access (403). Check the key's permissions.",
+				"endpoint_not_found": "The gateway responded, but the model list is unavailable (404). Check the API address or save the credential and test a chat model.",
+				"rate_limit": "The gateway responded, but the rate limit was reached (429). Try again later.",
+				"http_error": "The gateway returned HTTP {{status}}. Check the API address or contact your administrator.",
+				"invalid_response": "The gateway responded with an invalid model list. Check the API address.",
+				"invalid_address": "Enter a valid HTTP or HTTPS API Base URL.",
+				"check_unavailable": "The connection test is temporarily unavailable. Try again later."
+			}
+		},
 		"checkModels": "Test chat models",
 		"checkHint": "Sends a short chat request to each model and incurs a small amount of model usage.",
 		"checkStatus": "Chat test",

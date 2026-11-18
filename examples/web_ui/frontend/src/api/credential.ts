@@ -17,6 +17,11 @@ export interface NewApiModelCandidate {
 	capabilities_known: boolean;
 }
 
+export type GatewayConnectionResult = { elapsed_ms: number } & (
+	| { status: 'passed' }
+	| { status: 'failed'; code: string; diagnostic_id: string; http_status: number | null }
+);
+
 export const credentialApi = {
 	list: async (): Promise<CredentialListResponse> => {
 		return client.get<CredentialListResponse>('/credential/');
@@ -37,6 +42,16 @@ export const credentialApi = {
 
 	setEnabled: (credentialId: string, enabled: boolean) =>
 		client.patch<CredentialView>(`/credential/${credentialId}/enabled`, { enabled }),
+
+	checkConnection: (
+		body: { base_url: string; api_key?: string; credential_id?: string },
+		signal: AbortSignal,
+	) =>
+		client.post<GatewayConnectionResult>('/credential/newapi/check-connection', body, undefined, {
+			signal,
+			silent: true,
+			timeoutMs: 15_000,
+		}),
 
 	checkModel: (credentialId: string, model: string, signal: AbortSignal) =>
 		client.post<{ model: string; status: 'passed' | 'failed'; detail: string }>(

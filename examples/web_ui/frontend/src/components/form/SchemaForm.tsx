@@ -40,6 +40,8 @@ interface Props {
 	descriptionFor?: (key: string, prop: JSONSchemaProperty) => string | undefined;
 	/** Optional help shown beside the label on hover or keyboard focus. */
 	helpFor?: (key: string, prop: JSONSchemaProperty) => string | undefined;
+	/** Optional controls or messages displayed after a field's input. */
+	renderAfterField?: (key: string) => ReactNode;
 	/** Prefix for generated DOM IDs (so multiple SchemaForms on one page don't collide). */
 	idPrefix?: string;
 	/** Layout of non-boolean fields. `horizontal` puts the label left of the control. */
@@ -94,6 +96,7 @@ export function SchemaForm({
 	placeholderFor,
 	descriptionFor,
 	helpFor,
+	renderAfterField,
 	idPrefix = 'schema-form',
 	orientation = 'vertical',
 	className,
@@ -119,6 +122,7 @@ export function SchemaForm({
 				const placeholder = placeholderFor?.(key, prop) ?? prop.description;
 				const description = descriptionFor?.(key, prop);
 				const help = helpFor?.(key, prop);
+				const afterField = renderAfterField?.(key);
 				const current = values[key];
 
 				const fieldLabel = (
@@ -156,6 +160,7 @@ export function SchemaForm({
 							<FieldContent>
 								{labelNode}
 								{descriptionNode}
+								{afterField}
 							</FieldContent>
 							{control}
 						</Field>
@@ -164,6 +169,7 @@ export function SchemaForm({
 							{labelNode}
 							{control}
 							{descriptionNode}
+							{afterField}
 						</Field>
 					);
 
@@ -187,6 +193,7 @@ export function SchemaForm({
 							) : (
 								labelNode
 							)}
+							{afterField}
 						</Field>
 					);
 				}

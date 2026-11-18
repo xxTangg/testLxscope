@@ -29,6 +29,7 @@ import { renderToolCall } from './tool-renderers';
 import { countDiffStats, DiffStats, getResultDiff } from './tool-renderers/_shared';
 import type { TFunction, ToolCallWithResult } from './tool-renderers/types';
 import { workspaceApi } from '@/api';
+import { DiagnosticReference } from '@/components/DiagnosticReference';
 import { Markdown } from '@/components/markdown';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -60,8 +61,8 @@ import { Message, MessageFooter, MessageContent } from '@/components/ui/message'
 import { useAudioBlock, useReplayController } from '@/context/AudioContext';
 import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
+import { copyToClipboard, formatElapsedTime, formatNumber } from '@/utils/common';
 import { extensionForMediaType } from '@/utils/mediaType';
-import { copyToClipboard, formatNumber, formatTime } from '@/utils/common';
 import 'streamdown/styles.css';
 
 /**
@@ -895,6 +896,10 @@ function ASMessageBubbleComponent({ message, agentId, sessionId }: MessageBubble
 	const { t } = useTranslation();
 	const downloadContext = !isUser && agentId && sessionId ? { agentId, sessionId } : undefined;
 	const generatedFiles = downloadContext ? workspaceArtifacts(message) : [];
+	const diagnosticId = (message.error as
+		| (NonNullable<Msg['error']> & { diagnostic_id?: string | null })
+		| null
+		| undefined)?.diagnostic_id;
 
 	const isRunning = !message.finished_at;
 	const hasUsage =
@@ -946,10 +951,7 @@ function ASMessageBubbleComponent({ message, agentId, sessionId }: MessageBubble
 		.map((b) => hideWorkspacePaths(b.text, generatedFiles))
 		.join('\n\n');
 
-	const startMs = new Date(message.created_at).getTime();
-	const endMs = isRunning ? now : new Date(message.finished_at!).getTime();
-	const elapsedSeconds = Math.max(0, (endMs - startMs) / 1000);
-	const elapsedText = formatTime(elapsedSeconds);
+	const elapsedText = formatElapsedTime(message.created_at, message.finished_at, now);
 
 	return (
 		<Message align={isUser ? 'end' : 'start'} data-role={message.role}>
@@ -1007,6 +1009,11 @@ function ASMessageBubbleComponent({ message, agentId, sessionId }: MessageBubble
 									message.error?.message ?? t('messageBubble.error.unknown'),
 							})}
 						</AlertDescription>
+						{diagnosticId && (
+							<div className="col-start-2 mt-1">
+								<DiagnosticReference key={diagnosticId} id={diagnosticId} />
+							</div>
+						)}
 					</Alert>
 				)}
 				<AttachmentGroup className="max-w-full">
@@ -1033,7 +1040,9 @@ function ASMessageBubbleComponent({ message, agentId, sessionId }: MessageBubble
 							) : (
 								<CheckCircle data-icon="inline-start" />
 							)}
-							<span className="tabular-nums tracking-tighter">{elapsedText}</span>
+							{elapsedText && (
+								<span className="tabular-nums tracking-tighter">{elapsedText}</span>
+							)}
 							{hasUsage && (
 								<>
 									<ArrowUp data-icon="inline-start" className="ml-1" />
@@ -1083,10 +1092,7 @@ function ThinkingBlockView({ block }: { block: ThinkingBlock }) {
 		return () => clearInterval(id);
 	}, [isRunning]);
 
-	const startMs = new Date(block.created_at).getTime();
-	const endMs = isRunning ? now : new Date(block.finished_at!).getTime();
-	const elapsedSeconds = Math.max(0, (endMs - startMs) / 1000);
-	const elapsedText = formatTime(elapsedSeconds);
+	const elapsedText = formatElapsedTime(block.created_at, block.finished_at, now);
 	return (
 		<Collapsible>
 			<CollapsibleTrigger asChild>
@@ -1097,12 +1103,9 @@ function ThinkingBlockView({ block }: { block: ThinkingBlock }) {
 					)}
 				>
 					<span>
-						{t(
-							elapsedText === '0s'
-								? 'messageBubble.thinking'
-								: 'messageBubble.thinkingFor',
-							{ duration: elapsedText },
-						)}
+						{elapsedText && elapsedText !== '0s'
+							? t('messageBubble.thinkingFor', { duration: elapsedText })
+							: t('messageBubble.thinking')}
 					</span>
 					<ChevronRight className="hidden group-hover:flex group-data-[state=open]:flex size-3 shrink-0 transition-transform group-data-[state=open]:rotate-90" />
 				</div>

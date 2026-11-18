@@ -233,7 +233,7 @@ class ChatModelBase:
                         "Retrying in %.1fs...",
                         attempt + 1,
                         self.model,
-                        str(e),
+                        type(e).__name__,
                         self.retry_delay,
                     )
                     await asyncio.sleep(self.retry_delay)
@@ -572,7 +572,7 @@ class ChatModelBase:
                                 "failed: %s. Retrying in %.1fs...",
                                 attempt + 1,
                                 self.model,
-                                e,
+                                type(e).__name__,
                                 self.retry_delay,
                             )
                             await asyncio.sleep(self.retry_delay)
@@ -587,7 +587,7 @@ class ChatModelBase:
                         "Trying next.",
                         name,
                         self.model,
-                        e,
+                        type(e).__name__,
                     )
                     break
 

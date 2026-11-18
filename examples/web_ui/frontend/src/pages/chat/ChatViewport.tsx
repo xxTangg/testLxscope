@@ -9,6 +9,7 @@ import {
 	ShieldCheck,
 	UsersRound,
 } from 'lucide-react';
+import mime from 'mime';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -108,11 +109,11 @@ const KNOWN_PANELS: Record<PanelKey, true> = {
 	team: true,
 };
 
-/** Keep non-file model capabilities (for example thinking) out of accept. */
+/** Return the non-image file types that can be passed to the model directly. */
 function modelAttachmentInputTypes(inputTypes: string[]): string[] {
 	return inputTypes.filter(
 		(type) =>
-			/^(image|video|audio|text)\/.+/.test(type) ||
+			/^(video|audio|text)\/.+/.test(type) ||
 			type === 'application/pdf' ||
 			type.startsWith('application/vnd.') ||
 			type.startsWith('application/msword') ||
@@ -583,6 +584,7 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 		() =>
 			Array.from(
 				new Set([
+					'image/*',
 					...nativeAttachmentInputTypes,
 					...parserAttachmentExtensions,
 					...parserAttachmentMediaTypes,
@@ -592,7 +594,13 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 	);
 	const processChatAttachment = useCallback(
 		async (file: File) => {
-			if (!isNativeModelAttachment(file, nativeAttachmentInputTypes)) {
+			const declaredType = file.type || 'application/octet-stream';
+			const guessedType =
+				declaredType === 'application/octet-stream' ? mime.getType(file.name) : null;
+			const mediaType = guessedType?.startsWith('image/') ? guessedType : declaredType;
+			const isImage = mediaType.startsWith('image/');
+
+			if (!isImage && !isNativeModelAttachment(file, nativeAttachmentInputTypes)) {
 				try {
 					const parsed = await chatApi.parseAttachment(file);
 					return {
@@ -607,7 +615,8 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 				}
 			}
 
-			const filePath = (file as File & { path?: string }).path;
+			// The backend may be running on a different machine from the browser.
+			const filePath = isImage ? undefined : (file as File & { path?: string }).path;
 			if (filePath) {
 				return {
 					id: createUuid(),
@@ -615,7 +624,7 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 					source: {
 						type: 'url' as const,
 						url: `file://${filePath}`,
-						media_type: file.type || 'application/octet-stream',
+						media_type: mediaType,
 					},
 					name: file.name,
 					created_at: new Date().toISOString(),
@@ -641,7 +650,7 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 				type: 'data' as const,
 				source: {
 					type: 'base64' as const,
-					media_type: file.type || 'application/octet-stream',
+					media_type: mediaType,
 					data: btoa(binary),
 				},
 				name: file.name,

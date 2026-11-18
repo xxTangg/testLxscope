@@ -1,9 +1,11 @@
-import { CircleAlert, Loader2, PlusCircle, Save } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { CircleAlert, Loader2, Plug, PlusCircle, Save } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 
 import { credentialApi } from '@/api';
 import type { CredentialSchema, CredentialView } from '@/api';
-import { NEW_API_CREDENTIAL_TYPE } from '@/api/credential';
+import { ApiError } from '@/api/client';
+import { NEW_API_CREDENTIAL_TYPE, type GatewayConnectionResult } from '@/api/credential';
+import { DiagnosticReference } from '@/components/DiagnosticReference';
 import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
 import { Button } from '@/components/ui/button';
 import {
@@ -40,6 +42,11 @@ type Props = CredentialFormProps & {
 const CREDENTIAL_SCHEMA_SKIP_FIELDS = new Set(['id', 'type', 'enabled']);
 const NEW_API_SCHEMA_SKIP_FIELDS = new Set([...CREDENTIAL_SCHEMA_SKIP_FIELDS, 'embedding_models']);
 
+type ConnectionCheck =
+	| GatewayConnectionResult
+	| { status: 'checking' }
+	| { status: 'error'; code: 'invalid_address' | 'check_unavailable' };
+
 export function CredentialDialog({ open, onOpenChange, ...form }: Props) {
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -68,6 +75,8 @@ function CredentialDialogContent({
 	const [draft, setDraft] = useState<Record<string, SchemaFormValue>>({});
 	const [savedData] = useState(mode === 'edit' ? credential?.data : undefined);
 	const [submitting, setSubmitting] = useState(false);
+	const [connectionCheck, setConnectionCheck] = useState<ConnectionCheck | null>(null);
+	const checkController = useRef<AbortController | null>(null);
 
 	useEffect(() => {
 		let active = true;
@@ -81,6 +90,7 @@ function CredentialDialogContent({
 		);
 		return () => {
 			active = false;
+			checkController.current?.abort();
 		};
 	}, []);
 
@@ -116,6 +126,11 @@ function CredentialDialogContent({
 	);
 
 	const setField = (key: string, value: SchemaFormValue) => {
+		if (isNewApi && (key === 'base_url' || key === 'api_key')) {
+			checkController.current?.abort();
+			checkController.current = null;
+			setConnectionCheck(null);
+		}
 		setDraft((previous) => {
 			const current = previous[key] ?? (key === 'api_key' ? '' : values[key]) ?? '';
 			const updated = { ...previous, [key]: value };
@@ -135,6 +150,36 @@ function CredentialDialogContent({
 	const changeType = (nextType: string) => {
 		setSelectedType(nextType);
 		setDraft({});
+	};
+
+	const testConnection = async () => {
+		if (!canSave || checkController.current) return;
+		const controller = new AbortController();
+		checkController.current = controller;
+		setConnectionCheck({ status: 'checking' });
+		try {
+			const result = await credentialApi.checkConnection(
+				{
+					base_url: baseUrl,
+					api_key: apiKey || undefined,
+					credential_id: !apiKey && canReuseKey ? credential?.id : undefined,
+				},
+				controller.signal,
+			);
+			if (!controller.signal.aborted) setConnectionCheck(result);
+		} catch (error) {
+			if (!controller.signal.aborted) {
+				setConnectionCheck({
+					status: 'error',
+					code:
+						error instanceof ApiError && error.status === 422
+							? 'invalid_address'
+							: 'check_unavailable',
+				});
+			}
+		} finally {
+			if (checkController.current === controller) checkController.current = null;
+		}
 	};
 
 	const submit = async () => {
@@ -235,6 +280,57 @@ function CredentialDialogContent({
 								: undefined
 						}
 						helpFor={(key) => t('credentialFieldHelp.' + key, { defaultValue: '' })}
+						renderAfterField={(key) =>
+							key === 'base_url' &&
+							isNewApi && (
+								<div className="flex flex-col items-start gap-1.5">
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										disabled={
+											!canSave || submitting || connectionCheck?.status === 'checking'
+										}
+										onClick={testConnection}
+									>
+										{connectionCheck?.status === 'checking' ? (
+											<Loader2 className="animate-spin" />
+										) : (
+											<Plug />
+										)}
+										{t(
+											connectionCheck?.status === 'checking'
+												? 'credential.connectionCheck.checking'
+												: 'credential.connectionCheck.button',
+										)}
+									</Button>
+									{connectionCheck?.status === 'passed' && (
+										<p className="text-sm" role="status">
+											{t('credential.connectionCheck.passed', {
+												ms: connectionCheck.elapsed_ms,
+											})}
+										</p>
+									)}
+									{(connectionCheck?.status === 'failed' ||
+										connectionCheck?.status === 'error') && (
+										<p className="text-sm text-destructive" role="status">
+											{t(`credential.connectionCheck.errors.${connectionCheck.code}`, {
+												status:
+													connectionCheck.status === 'failed'
+														? connectionCheck.http_status
+														: undefined,
+											})}
+										</p>
+									)}
+									{connectionCheck?.status === 'failed' && (
+										<DiagnosticReference
+											key={connectionCheck.diagnostic_id}
+											id={connectionCheck.diagnostic_id}
+										/>
+									)}
+								</div>
+							)
+						}
 						onChange={setField}
 					/>
 				)}

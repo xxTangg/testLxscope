@@ -294,7 +294,13 @@ class Msg(BaseModel):
                 )
 
             case EventType.TEXT_BLOCK_START:
-                self.content.append(TextBlock(id=event.block_id, text=""))
+                self.content.append(
+                    TextBlock(
+                        id=event.block_id,
+                        text="",
+                        created_at=event.created_at,
+                    ),
+                )
 
             case EventType.TEXT_BLOCK_DELTA | EventType.TEXT_BLOCK_END:
                 block = self._find_block("text", event.block_id)
@@ -354,7 +360,11 @@ class Msg(BaseModel):
 
             case EventType.THINKING_BLOCK_START:
                 self.content.append(
-                    ThinkingBlock(id=event.block_id, thinking=""),
+                    ThinkingBlock(
+                        id=event.block_id,
+                        thinking="",
+                        created_at=event.created_at,
+                    ),
                 )
 
             case EventType.THINKING_BLOCK_DELTA | EventType.THINKING_BLOCK_END:

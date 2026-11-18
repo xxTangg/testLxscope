@@ -50,3 +50,5 @@ class ErrorInfo(BaseModel):
     """Stable classification key; the frontend localizes off it."""
     message: str
     """Short, sanitized, human-readable description."""
+    diagnostic_id: str | None = None
+    """Reference to the corresponding server log entry, when available."""

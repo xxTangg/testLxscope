@@ -13,11 +13,29 @@ export function credentialLabel(credential: CredentialView): string {
  */
 export const copyToClipboard = async (text: string): Promise<boolean> => {
 	try {
-		await navigator.clipboard.writeText(text);
-		return true;
-	} catch (err) {
-		console.error('Failed to copy text: ', err);
+		if (navigator.clipboard) {
+			await navigator.clipboard.writeText(text);
+			return true;
+		}
+	} catch {
+		// An HTTP deployment or a browser permission may need the legacy API.
+	}
+
+	const focused = document.activeElement;
+	const input = document.createElement('textarea');
+	input.value = text;
+	input.readOnly = true;
+	input.style.cssText = 'position:fixed;opacity:0;width:1px;height:1px;pointer-events:none';
+	const container = focused?.closest('[role="dialog"]') ?? document.body;
+	container.appendChild(input);
+	try {
+		input.select();
+		return document.execCommand('copy');
+	} catch {
 		return false;
+	} finally {
+		input.remove();
+		if (focused instanceof HTMLElement) focused.focus({ preventScroll: true });
 	}
 };
 
@@ -125,6 +143,28 @@ export const formatTime = (
 	}
 	return `${Math.floor(total / 31556952)}y`;
 };
+
+/** Format the time between chat events, including timestamps saved without an offset. */
+export function formatElapsedTime(
+	createdAt: string,
+	finishedAt: string | null | undefined,
+	now: number,
+): string | null {
+	const offset = /(?:Z|[+-]\d{2}:\d{2})$/i;
+	const startOffset = createdAt.match(offset)?.[0];
+	const endOffset = finishedAt?.match(offset)?.[0];
+	// Older completed replies store wall times. Use a shared offset so their
+	// duration is independent of the browser timezone, including after a resume.
+	const fallbackOffset = endOffset ?? startOffset ?? 'Z';
+	const startMs = Date.parse(createdAt + (startOffset || !finishedAt ? '' : fallbackOffset));
+	const endMs = finishedAt
+		? Date.parse(finishedAt + (endOffset ? '' : fallbackOffset))
+		: now;
+	const elapsedMs = Math.max(0, endMs - startMs);
+	if (!Number.isFinite(elapsedMs)) return null;
+	if (elapsedMs > 0 && elapsedMs < 1000) return `${elapsedMs}ms`;
+	return formatTime(elapsedMs / 1000);
+}
 
 /**
  * A deterministic, readable colour pair for a fallback avatar.

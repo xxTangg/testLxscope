@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import mime from 'mime';
 import React, {
+	useCallback,
 	useState,
 	useRef,
 	useMemo,
@@ -43,6 +44,7 @@ import { createUuid } from '@/utils/uuid';
  * Represents a file that has been selected and processed (or is being processed).
  */
 interface ProcessedFile {
+	id: string;
 	/** Original file name for display */
 	name: string;
 	/** Processing status */
@@ -109,6 +111,7 @@ interface TextInputProps {
 
 export interface TextInputRef {
 	focus: () => void;
+	addFiles: (files: FileList) => void;
 }
 
 /** One line box of textarea text: ``text-sm`` (14px) at a 1.5 line-height. */
@@ -178,10 +181,52 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 
 		// Whether any file is still being processed (block send until all done)
 		const hasProcessing = files.some((f) => f.status === 'processing');
+		const text = value.trim();
+		const hasContent =
+			Boolean(text) || files.some(({ status, block }) => status === 'done' && block);
 
-		useImperativeHandle(ref, () => ({
-			focus: () => textareaRef.current?.focus(),
-		}));
+		const removeFile = useCallback((id: string) => {
+			setFiles((previous) => previous.filter((file) => file.id !== id));
+		}, []);
+
+		const addFiles = useCallback(
+			(selected: FileList) => {
+				if (attachDisabled) return;
+
+				for (const file of Array.from(selected)) {
+					const id = createUuid();
+					const pending: ProcessedFile = {
+						id,
+						name: file.name,
+						status: 'processing',
+						block: null,
+					};
+					setFiles((previous) => [...previous, pending]);
+					fileProcessor(file)
+						.then((block) => {
+							if (!block) {
+								removeFile(id);
+								return;
+							}
+							setFiles((previous) =>
+								previous.map((attachment) =>
+									attachment.id === id
+										? { ...attachment, status: 'done', block }
+										: attachment,
+								),
+							);
+						})
+						.catch(() => removeFile(id));
+				}
+			},
+			[attachDisabled, fileProcessor, removeFile],
+		);
+
+		useImperativeHandle(
+			ref,
+			() => ({ focus: () => textareaRef.current?.focus(), addFiles }),
+			[addFiles],
+		);
 
 		// Grow the textarea with its content. The ``auto`` reset is what lets it
 		// shrink again — ``scrollHeight`` never reports less than the current height.
@@ -232,16 +277,16 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 		const handleSend = () => {
 			// ``phase`` is guarded here rather than only on the button, since Enter
 			// calls this directly and would otherwise send during a running reply.
-			if (phase !== 'idle' || !value.trim() || disabled || hasProcessing) return;
+			if (phase !== 'idle' || !hasContent || disabled || hasProcessing) return;
 
 			const blocks: ContentBlock[] = [];
 
 			// Add text block
-			if (value.trim()) {
+			if (text) {
 				const textBlock: TextBlock = {
 					id: createUuid(),
 					type: 'text',
-					text: value.trim(),
+					text,
 					created_at: new Date().toISOString(),
 					finished_at: new Date().toISOString(),
 				};
@@ -307,7 +352,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 					onClick: onInterrupt,
 				};
 			}
-			if (value.trim()) {
+			if (hasContent) {
 				return {
 					icon: ArrowUp,
 					tooltip: t('textInput.send'),
@@ -326,46 +371,9 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 		})();
 
 		const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-			if (!e.target.files) return;
-			const selected = Array.from(e.target.files);
+			if (e.target.files) addFiles(e.target.files);
 			// Reset input value so the same file can be re-selected
 			e.target.value = '';
-
-			selected.forEach((file) => {
-				// Insert a placeholder in processing state
-				const placeholder: ProcessedFile = {
-					name: file.name,
-					status: 'processing',
-					block: null,
-				};
-
-				setFiles((prev) => [...prev, placeholder]);
-
-				fileProcessor(file)
-					.then((block) => {
-						setFiles(
-							(prev) =>
-								prev
-									.map((f) =>
-										f.name === file.name && f.status === 'processing'
-											? block
-												? { ...f, status: 'done', block }
-												: null
-											: f,
-									)
-									.filter(Boolean) as ProcessedFile[],
-						);
-					})
-					.catch(() => {
-						// Caller is responsible for error notification (e.g. toast).
-						// Just silently remove the entry here.
-						setFiles((prev) =>
-							prev.filter(
-								(f) => !(f.name === file.name && f.status === 'processing'),
-							),
-						);
-					});
-			});
 		};
 
 		return (
@@ -378,7 +386,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 				>
 					{files.length > 0 && (
 						<AttachmentGroup className={'w-full max-w-full px-1 mt-1'}>
-							{files.map((file, index) => {
+							{files.map((file) => {
 								const isImage =
 									file.block &&
 									file.block.type === 'data' &&
@@ -393,7 +401,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 								}
 
 								return (
-									<Attachment>
+									<Attachment key={file.id}>
 										<AttachmentMedia variant={isImage ? 'image' : 'icon'}>
 											{file.status === 'processing' ? (
 												<Loader2 className="size-3 shrink-0 animate-spin" />
@@ -416,11 +424,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 											</AttachmentDescription>
 										</AttachmentContent>
 										<AttachmentActions>
-											<AttachmentAction
-												onClick={() =>
-													setFiles(files.filter((_, i) => i !== index))
-												}
-											>
+											<AttachmentAction onClick={() => removeFile(file.id)}>
 												<XIcon />
 											</AttachmentAction>
 										</AttachmentActions>

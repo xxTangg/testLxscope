@@ -25,7 +25,7 @@ from ._schema._credential import (
     SetCredentialEnabledRequest,
 )
 from .._service import CredentialView, ResourceAccessService
-from .._service._newapi import NewAPIGateway
+from .._service._newapi import GatewayConnectionResult, NewAPIGateway
 from ..storage import StorageBase
 from ...credential import CredentialBase, CredentialFactory, NewAPICredential
 
@@ -68,6 +68,20 @@ async def _resolve_newapi_gateway(
         )
 
     return NewAPIGateway(body.base_url, key)
+
+
+@credential_router.post(
+    "/newapi/check-connection",
+    response_model=GatewayConnectionResult,
+)
+async def check_newapi_connection(
+    body: NewAPIGatewayRequest,
+    user_id: str = Depends(get_current_user_id),
+    access: ResourceAccessService = Depends(get_resource_access_service),
+) -> GatewayConnectionResult:
+    """Test the gateway configured in the form without saving it."""
+    gateway = await _resolve_newapi_gateway(body, user_id, access)
+    return await gateway.check_connection()
 
 
 @credential_router.post(

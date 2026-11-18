@@ -33,6 +33,10 @@ class GetModelContextSizeTest(IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(1000000, model.context_size)
+        self.assertIn(
+            "image/*",
+            model.formatter.supported_input_media_types,
+        )
 
     async def test_keeps_default_for_unknown_model(self) -> None:
         """A model without a card keeps the constructor default."""
@@ -54,3 +58,7 @@ class GetModelContextSizeTest(IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(65536, model.context_size)
+        self.assertIn(
+            "image/*",
+            model.formatter.supported_input_media_types,
+        )

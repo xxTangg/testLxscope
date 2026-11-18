@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """NewAPI credential and per-credential model catalogue tests."""
+import errno
 import json
+import socket
+import ssl
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +14,7 @@ from pydantic import ValidationError
 
 from agentscope.app._router._credential import (
     check_credential_model,
+    check_newapi_connection,
     credential_router,
     probe_newapi_embedding,
     set_credential_enabled,
@@ -26,6 +30,7 @@ from agentscope.app._router._model import list_models
 from agentscope.app._router._schema._credential import (
     CheckCredentialModelRequest,
     NewAPIEmbeddingProbeRequest,
+    NewAPIGatewayRequest,
     SetCredentialEnabledRequest,
     UpdateCredentialRequest,
 )
@@ -52,6 +57,7 @@ from agentscope.app.storage import (
 from agentscope.app.storage._utils import _dump_with_secrets
 from agentscope.app._service._newapi import get_owned_newapi_gateway
 from agentscope.credential import CredentialFactory, NewAPICredential
+from agentscope.message import Base64Source, DataBlock, UserMsg
 
 
 _DATA = {
@@ -147,7 +153,9 @@ class NewAPIModelTest(IsolatedAsyncioTestCase):
             )
         self.assertEqual(400, error.exception.status_code)
 
-    async def test_chat_uses_gateway_context_size(self) -> None:
+    async def test_chat_uses_gateway_context_size_and_forwards_images(
+        self,
+    ) -> None:
         access = MagicMock(
             resolve_credential=AsyncMock(
                 return_value=SimpleNamespace(data=_DATA)
@@ -167,6 +175,22 @@ class NewAPIModelTest(IsolatedAsyncioTestCase):
         self.assertEqual(
             "http://newapi.internal:3000/v1",
             str(model.client.base_url).rstrip("/"),
+        )
+        image = DataBlock(
+            name="attachment.png",
+            source=Base64Source(media_type="image/png", data="iVBORw0KGgo="),
+        )
+        payload = await model.formatter.format(
+            [UserMsg(name="user", content=[image])],
+        )
+        self.assertEqual(
+            [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                },
+            ],
+            payload[0]["content"],
         )
 
 
@@ -357,9 +381,114 @@ class NewAPIGatewayTest(IsolatedAsyncioTestCase):
         self.assertEqual(1, len(logs.output))
         self.assertIn("endpoint=chat/completions", logs.output[0])
         self.assertIn("model='embedding-model'", logs.output[0])
-        self.assertIn("HTTP 400", logs.output[0])
+        self.assertIn("http_status=400", logs.output[0])
         self.assertNotIn(_DATA["api_key"], logs.output[0])
         self.assertNotIn("not a chat model", logs.output[0])
+
+    async def test_connection_draft_checks_models_without_loading_a_record(
+        self,
+    ) -> None:
+        access = MagicMock()
+        client_class = httpx.AsyncClient
+
+        def gateway(request: httpx.Request) -> httpx.Response:
+            self.assertEqual("GET", request.method)
+            self.assertEqual(
+                "http://newapi.internal:3000/v1/models",
+                str(request.url),
+            )
+            self.assertEqual(
+                "Bearer test-token",
+                request.headers["authorization"],
+            )
+            return httpx.Response(200, json={"data": []})
+
+        with patch(
+            "agentscope.app._service._newapi.httpx.AsyncClient",
+            side_effect=lambda **kwargs: client_class(
+                transport=httpx.MockTransport(gateway), **kwargs,
+            ),
+        ):
+            result = await check_newapi_connection(
+                NewAPIGatewayRequest(
+                    base_url=_DATA["base_url"],
+                    api_key=_DATA["api_key"],
+                ),
+                "user-1",
+                access,
+            )
+        self.assertEqual("passed", result.status)
+        self.assertGreaterEqual(result.elapsed_ms, 0)
+        self.assertIsNone(result.diagnostic_id)
+        access.resolve_for_edit.assert_not_called()
+
+    async def test_connection_failures_are_classified_and_logged(self) -> None:
+        client_class = httpx.AsyncClient
+        cases = (
+            (401, "authentication"),
+            (403, "permission"),
+            (404, "endpoint_not_found"),
+            (200, "invalid_response"),
+            (socket.gaierror(socket.EAI_NONAME, "sensitive"), "dns"),
+            (
+                ConnectionRefusedError(errno.ECONNREFUSED, "sensitive"),
+                "connection_refused",
+            ),
+            (ssl.SSLCertVerificationError(1, "sensitive"), "certificate"),
+            (httpx.ConnectTimeout("sensitive"), "timeout"),
+        )
+        for failure, code in cases:
+            with self.subTest(code=code):
+                def gateway(
+                    request: httpx.Request,
+                    fault: int | Exception = failure,
+                ) -> httpx.Response:
+                    if isinstance(fault, int):
+                        return httpx.Response(
+                            fault,
+                            text="sensitive",
+                            headers={"x-request-id": "gateway-123"},
+                        )
+                    if isinstance(fault, httpx.ConnectTimeout):
+                        raise fault
+                    raise httpx.ConnectError(
+                        "sensitive",
+                        request=request,
+                    ) from fault
+
+                with (
+                    patch(
+                        "agentscope.app._service._newapi.httpx.AsyncClient",
+                        side_effect=lambda **kwargs: client_class(
+                            transport=httpx.MockTransport(gateway), **kwargs,
+                        ),
+                    ),
+                    self.assertLogs("as", level="WARNING") as logs,
+                ):
+                    result = await check_newapi_connection(
+                        NewAPIGatewayRequest(
+                            base_url=_DATA["base_url"],
+                            api_key=_DATA["api_key"],
+                        ),
+                        "user-1",
+                        MagicMock(),
+                    )
+                self.assertEqual("failed", result.status)
+                self.assertEqual(code, result.code)
+                self.assertEqual(1, len(logs.output))
+                self.assertIn(
+                    f"diagnostic_id={result.diagnostic_id}",
+                    logs.output[0],
+                )
+                self.assertIn(
+                    "host='newapi.internal' port=3000",
+                    logs.output[0],
+                )
+                self.assertNotIn("sensitive", logs.output[0])
+                self.assertNotIn(_DATA["api_key"], logs.output[0])
+                if isinstance(failure, int):
+                    self.assertEqual(failure, result.http_status)
+                    self.assertIn("gateway-123", logs.output[0])
 
     async def test_embedding_probe_uses_saved_gateway(
         self,

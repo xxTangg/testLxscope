@@ -251,10 +251,13 @@ export function useMessages(
 					currentReplyRef.current = existing;
 				} else {
 					audioManager?.stopAllPlayback();
-					const msg =
-						e.role === 'user'
-							? UserMsg({ id: e.reply_id, name: e.name, content: [] })
-							: AssistantMsg({ id: e.reply_id, name: e.name, content: [] });
+					const start = {
+						id: e.reply_id,
+						name: e.name,
+						content: [],
+						created_at: e.created_at,
+					};
+					const msg = e.role === 'user' ? UserMsg(start) : AssistantMsg(start);
 					msgsRef.current = [...msgsRef.current, msg];
 					currentReplyRef.current = msg;
 				}

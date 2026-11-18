@@ -254,6 +254,7 @@
 	"textInput": {
 		"toComplete": "补全",
 		"attach": "添加附件",
+		"dropAttachments": "松开鼠标即可添加附件",
 		"attachNotSupported": "当前模型不支持文件附件",
 		"send": "发送",
 		"stop": "停止生成",
@@ -299,7 +300,7 @@
 			"rate_limit": "触发限流或额度用尽 —— 请稍后重试。",
 			"invalid_request": "发往模型的请求被判定为非法。",
 			"upstream": "上游模型服务返回了错误。",
-			"connection": "无法连接模型服务 —— 网络错误或超时。",
+			"connection": "暂时无法连接模型服务。请稍后重试，或联系管理员。",
 			"internal": "发生了未预期的内部错误。",
 			"setup": "会话准备失败 —— 请检查该智能体的模型、工具和知识库配置。",
 			"unknown": "回复因未知错误失败。"
@@ -532,6 +533,12 @@
 		"title": "删除知识库",
 		"description": "此操作将永久删除知识库 \"{{name}}\" 及其所有已索引文档，且无法撤销。"
 	},
+	"diagnostic": {
+		"reference": "诊断编号",
+		"copy": "复制诊断编号",
+		"copied": "已复制",
+		"copyFailed": "自动复制失败，请手动选中编号复制。"
+	},
 	"credential": {
 		"noProviders": "暂无可用提供商",
 		"selectHint": "未选择凭证",
@@ -546,6 +553,27 @@
 		"enable": "启用",
 		"disable": "停用",
 		"connectionChanged": "地址或 API Key 已变更，请重新选择这条配置使用的对话模型。也可以留空后保存。",
+		"connectionCheck": {
+			"button": "测试连接",
+			"checking": "正在测试连接…",
+			"passed": "网关连接成功 · {{ms}} ms",
+			"errors": {
+				"dns": "服务器无法解析网关域名。请检查域名或联系管理员。",
+				"connection_refused": "网关端口拒绝连接。请检查端口和网关服务是否启动。",
+				"certificate": "网关证书验证失败。请联系管理员检查证书。",
+				"tls": "无法与网关建立加密连接。请检查 HTTPS 地址或联系管理员。",
+				"timeout": "连接或等待网关响应超时。请稍后重试，或联系管理员。",
+				"network_error": "服务器无法连接 AI 网关。请检查地址或联系管理员。",
+				"authentication": "网关已响应，但拒绝了 API Key（401）。请检查密钥。",
+				"permission": "网关已响应，但拒绝了访问（403）。请检查密钥权限。",
+				"endpoint_not_found": "网关已响应，但模型列表接口不可用（404）。请检查 API 地址，或保存后测试对话模型。",
+				"rate_limit": "网关已响应，但当前触发限流（429）。请稍后重试。",
+				"http_error": "网关返回 HTTP {{status}}。请检查 API 地址或联系管理员。",
+				"invalid_response": "网关已响应，但返回的模型列表格式无效。请检查 API 地址。",
+				"invalid_address": "请输入有效的 HTTP 或 HTTPS API Base URL。",
+				"check_unavailable": "暂时无法完成连接测试，请稍后重试。"
+			}
+		},
 		"checkModels": "测试对话模型",
 		"checkHint": "逐个发送简短的对话请求进行测试，会产生少量模型用量。",
 		"checkStatus": "对话测试",

@@ -3429,7 +3429,7 @@ class Agent:
                         )
 
         if last_exception:
-            raise last_exception from None
+            raise last_exception
 
         raise RuntimeError(
             "Model call failed after retries, but no exception was raised.",

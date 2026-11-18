@@ -60,7 +60,7 @@ async def get_model(
 
     if isinstance(credential, NewAPICredential):
         model.context_size = credential.context_size
-        model.formatter.input_types = ["text/plain"]
+        model.formatter.input_types = ["text/plain", "image/*"]
         return model
 
     # Override the context size and the formatter's input types with the
@@ -77,6 +77,11 @@ async def get_model(
             "Failed to look up model card for %s, using defaults.",
             config.model,
         )
+
+    # Chat attachments are forwarded as images regardless of the model
+    # catalogue. The provider decides whether the selected model accepts them.
+    if "image/*" not in model.formatter.input_types:
+        model.formatter.input_types = [*model.formatter.input_types, "image/*"]
 
     return model
 

@@ -8,10 +8,13 @@ delivers the news into the leader's inbox instead of leaving it
 waiting.
 """
 import json
+from time import monotonic
 from types import SimpleNamespace
 from typing import AsyncGenerator
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
+
+import httpx
 
 from utils import AnyString
 
@@ -332,6 +335,45 @@ class TeamFailureReportTest(IsolatedAsyncioTestCase):
                 )
         self.assertIn("Reply failed for session", logs.output[0])
         self.assertIn("ValueError: model stream failed", logs.output[0])
+
+    async def test_model_failure_id_is_logged_and_published(self) -> None:
+        service = ChatService(
+            storage=self.storage,
+            workspace_manager=self.workspace_manager,
+            scheduler_manager=object(),
+            background_task_manager=object(),
+            message_bus=self.bus,
+            resource_access_service=object(),
+        )
+        request = httpx.Request(
+            "POST",
+            "https://gateway.test/v1/chat/completions?private=value",
+            headers={"Authorization": "Bearer private-key"},
+        )
+        response = httpx.Response(502, request=request, text="private-body")
+        error = httpx.HTTPStatusError(
+            "private-body", request=request, response=response,
+        )
+        reply = AssistantMsg(id="reply-1", name="worker", content=[])
+        with (
+            patch(
+                "agentscope.app._service._chat.publish_session_event",
+                new=AsyncMock(return_value="cursor"),
+            ) as publish,
+            self.assertLogs("as", level="WARNING") as logs,
+        ):
+            await service._close_failed_reply(
+                self.worker_session.id, reply, error, monotonic(),
+            )
+
+        diagnostic_id = reply.error.diagnostic_id
+        self.assertTrue(diagnostic_id)
+        event = publish.await_args.args[2]
+        self.assertEqual(diagnostic_id, event["error"]["diagnostic_id"])
+        self.assertIn(f"diagnostic_id={diagnostic_id}", logs.output[0])
+        self.assertIn("host='gateway.test' port=443", logs.output[0])
+        self.assertIn("http_status=502", logs.output[0])
+        self.assertNotIn("private", logs.output[0])
 
     async def test_worker_interruption_reaches_the_leader(self) -> None:
         """An interrupted worker turn is reported too."""

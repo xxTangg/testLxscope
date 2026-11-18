@@ -6,8 +6,8 @@ import {
 	type TextBlock,
 	type ToolCallBlock,
 } from '@agentscope-ai/agentscope/message';
-import { GitBranch, TriangleAlert } from 'lucide-react';
-import React, { useEffect, useMemo, useState } from 'react';
+import { GitBranch, Paperclip, TriangleAlert } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '../ui/button';
 import { DiffStats } from './tool-renderers/_shared';
@@ -15,7 +15,7 @@ import type { GitStatus } from '@/api';
 import { ASMessageBubble } from '@/components/chat/ASMessageBubble.tsx';
 import { ConfirmCard } from '@/components/chat/ConfirmCard.tsx';
 import { FlipCard } from '@/components/chat/FlipCard.tsx';
-import { TextInput } from '@/components/chat/TextInput.tsx';
+import { TextInput, type TextInputRef } from '@/components/chat/TextInput.tsx';
 import { WorkingDirectoryDialog } from '@/components/dialog/WorkingDirectoryDialog';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert.tsx';
 import { Marker, MarkerContent } from '@/components/ui/marker';
@@ -140,6 +140,40 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 	onRefreshGit,
 }) => {
 	const { t, i18n } = useTranslation();
+	const textInputRef = useRef<TextInputRef>(null);
+	const fileDragDepth = useRef(0);
+	const [draggingFiles, setDraggingFiles] = useState(false);
+	const canAttach = !loading && !disabled && allowedInputTypes.length > 0;
+
+	const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+		if (!event.dataTransfer.types.includes('Files')) return;
+		// The chat's children each receive drag enter/leave events. Keep the
+		// overlay visible while moving between them.
+		fileDragDepth.current += 1;
+		setDraggingFiles(true);
+	};
+
+	const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+		if (!event.dataTransfer.types.includes('Files')) return;
+		event.preventDefault();
+		event.dataTransfer.dropEffect = canAttach ? 'copy' : 'none';
+	};
+
+	const handleDragLeave = () => {
+		if (fileDragDepth.current === 0) return;
+		fileDragDepth.current -= 1;
+		if (fileDragDepth.current === 0) setDraggingFiles(false);
+	};
+
+	const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+		const dropped = event.dataTransfer.files;
+		if (dropped.length === 0 && !event.dataTransfer.types.includes('Files')) return;
+		event.preventDefault();
+		fileDragDepth.current = 0;
+		setDraggingFiles(false);
+		if (canAttach) textInputRef.current?.addFiles(dropped);
+	};
+
 	// Only a session that finished loading with nothing in it is empty.
 	// Treating "no messages yet" as empty would flash the greeting over
 	// every session that does have history.
@@ -178,12 +212,25 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 	// down to the message list shrinks to its content instead of filling.
 	return (
 		<div
+			onDragEnter={handleDragEnter}
+			onDragOver={handleDragOver}
+			onDragLeave={handleDragLeave}
+			onDrop={handleDrop}
 			className={cn(
-				'flex flex-col h-full w-full items-center gap-4',
+				'relative flex flex-col h-full w-full items-center gap-4',
 				isEmpty && 'justify-center',
 				className,
 			)}
 		>
+			{canAttach && draggingFiles && (
+				<div
+					role="status"
+					className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-primary bg-background/90 text-sm font-medium"
+				>
+					<Paperclip className="size-4" />
+					{t('textInput.dropAttachments')}
+				</div>
+			)}
 			{loading ? (
 				<div className="flex flex-1 w-full items-center justify-center">
 					{showSpinner ? <Spinner className="size-5 text-muted-foreground" /> : null}
@@ -322,6 +369,7 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 				    edges parallel — a plain rectangle here would show the
 				    pill's corners cutting into it. */}
 					<TextInput
+						ref={textInputRef}
 						className="min-w-full max-w-full w-full rounded-[32px] bg-muted p-1"
 						onSend={onSend}
 						disabled={disabled}

@@ -18,6 +18,7 @@ import json
 import mimetypes
 import re
 from dataclasses import dataclass
+from time import monotonic
 from typing import Literal, TYPE_CHECKING
 
 from fastapi import HTTPException
@@ -76,6 +77,8 @@ from ...model import ChatModelBase
 from ...event import (
     AgentEvent,
     CustomEvent,
+    ModelCallEndEvent,
+    ModelCallStartEvent,
     ReplyStartEvent,
     ReplyEndEvent,
     ReplyFinishedReason,
@@ -83,10 +86,15 @@ from ...event import (
     ExternalExecutionResultEvent,
     UserInterruptEvent,
 )
-from ._errors import _classify_error, _classify_setup_error
+from ._errors import (
+    _classify_error,
+    _classify_setup_error,
+    log_upstream_failure,
+)
 from ..._utils._common import _generate_id
 from ...message import AssistantMsg, HintBlock, Msg, TextBlock, UserMsg
 from ...permission import AdditionalWorkingDirectory
+from ...types import ErrorType
 from ...workspace import WorkspaceBase
 
 if TYPE_CHECKING:
@@ -540,7 +548,7 @@ class ChatService:
                 "Auto-naming session %r failed, keeping an excerpt of "
                 "the first message instead: %s",
                 session_record.id,
-                e,
+                type(e).__name__,
             )
 
         try:
@@ -574,6 +582,7 @@ class ChatService:
         session_id: str,
         reply_msg: Msg,
         error: Exception,
+        model_started_at: float | None = None,
     ) -> str | None:
         """Close a reply that died mid-stream, and say why.
 
@@ -594,6 +603,9 @@ class ChatService:
                 The reply in flight.
             error (`Exception`):
                 What killed the stream.
+            model_started_at (`float | None`, optional):
+                Monotonic start time of the in-flight model call, including
+                retries and fallback, when the failure occurred during one.
         """
         if reply_msg.finished_reason is not None:
             logger.exception(
@@ -603,17 +615,29 @@ class ChatService:
             )
             return None
 
+        error_info = _classify_error(error)
+        if model_started_at is not None or error_info.type not in (
+            ErrorType.UNKNOWN,
+            ErrorType.INTERNAL,
+        ):
+            diagnostic = log_upstream_failure(
+                error,
+                operation="chat",
+                started_at=model_started_at,
+            )
+            error_info.diagnostic_id = diagnostic.diagnostic_id
+        else:
+            logger.error(
+                "Reply failed for session %r (classified as %s).",
+                session_id,
+                error_info.type,
+                exc_info=error,
+            )
         end_event = ReplyEndEvent(
             session_id=session_id,
             reply_id=reply_msg.id,
             finished_reason=ReplyFinishedReason.ERROR,
-            error=_classify_error(error),
-        )
-        logger.error(
-            "Reply failed for session %r (classified as %s).",
-            session_id,
-            end_event.error.type if end_event.error else "error",
-            exc_info=error,
+            error=error_info,
         )
         reply_msg.append_event(end_event)
         return await publish_session_event(
@@ -777,6 +801,7 @@ class ChatService:
                 id=reply_id,
                 name=agent_id,
                 content=[],
+                created_at=start_event.created_at,
             )
             checkpoint_cursor = ""
             for event in (start_event, end_event):
@@ -1396,6 +1421,7 @@ class ChatService:
             try:
                 while True:
                     reply_msg = None
+                    model_started_at = None
                     try:
                         if input_msg is None or isinstance(
                             input_msg,
@@ -1419,6 +1445,10 @@ class ChatService:
                             async for event in agent.reply_stream(
                                 inputs=input_msg,
                             ):
+                                if isinstance(event, ModelCallStartEvent):
+                                    model_started_at = monotonic()
+                                elif isinstance(event, ModelCallEndEvent):
+                                    model_started_at = None
                                 # Apply to reply_msg FIRST (sync — never
                                 # interrupted), so an interrupt in the
                                 # awaits below can't lose this event.
@@ -1427,6 +1457,7 @@ class ChatService:
                                         id=event.reply_id,
                                         name=event.name,
                                         content=[],
+                                        created_at=event.created_at,
                                     )
                                 elif reply_msg is not None:
                                     reply_msg.append_event(event)
@@ -1519,6 +1550,10 @@ class ChatService:
                             async for event in agent.reply_stream(
                                 inputs=input_msg,
                             ):
+                                if isinstance(event, ModelCallStartEvent):
+                                    model_started_at = monotonic()
+                                elif isinstance(event, ModelCallEndEvent):
+                                    model_started_at = None
                                 # Apply to the persisted reply FIRST
                                 # (synchronous), then publish/project —
                                 # see Case A above.
@@ -1577,6 +1612,7 @@ class ChatService:
                                 session_id,
                                 reply_msg,
                                 e,
+                                model_started_at,
                             )
                             if failure_cursor is not None:
                                 checkpoint_cursor = failure_cursor

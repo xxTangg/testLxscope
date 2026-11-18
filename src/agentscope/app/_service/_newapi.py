@@ -2,6 +2,7 @@
 """Model discovery and embedding probes for New API gateways."""
 
 import asyncio
+from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
@@ -11,6 +12,7 @@ from pydantic import BaseModel
 from ..._logging import logger
 from ...credential import NewAPICredential
 from ._access import ResourceAccessService
+from ._errors import UpstreamDiagnostic, log_upstream_failure
 
 if TYPE_CHECKING:
     from ..storage import StorageBase
@@ -26,18 +28,38 @@ def _gateway_failure(
     detail: str,
     *,
     model: str | None = None,
-    cause: Exception | None = None,
-    status_code: int = 502,
 ) -> HTTPException:
     """Log the failure without logging credentials or upstream content."""
     logger.warning(
-        "New API request failed: endpoint=%s model=%r cause=%s detail=%s",
+        "New API request failed: endpoint=%s model=%r detail=%s",
         endpoint,
         model,
-        type(cause).__name__ if cause is not None else "InvalidResponse",
         detail,
     )
-    return HTTPException(status_code=status_code, detail=detail)
+    return HTTPException(status_code=502, detail=detail)
+
+
+class GatewayRequestError(HTTPException):
+    """Preserve the existing gateway HTTP error and its diagnostic."""
+
+    def __init__(
+        self,
+        status_code: int,
+        detail: str,
+        diagnostic: UpstreamDiagnostic,
+    ) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.diagnostic = diagnostic
+
+
+class GatewayConnectionResult(BaseModel):
+    """Outcome of a lightweight gateway connection check."""
+
+    status: Literal["passed", "failed"]
+    elapsed_ms: int
+    diagnostic_id: str | None = None
+    code: str | None = None
+    http_status: int | None = None
 
 
 async def get_owned_newapi_gateway(
@@ -73,6 +95,25 @@ class NewAPIGateway:
     def __init__(self, base_url: str, api_key: str) -> None:
         self._base_url = base_url
         self._api_key = api_key
+
+    async def check_connection(self) -> GatewayConnectionResult:
+        """Check the models endpoint without running inference."""
+        started_at = monotonic()
+        try:
+            await self._request("models")
+        except GatewayRequestError as exc:
+            diagnostic = exc.diagnostic
+            return GatewayConnectionResult(
+                status="failed",
+                elapsed_ms=diagnostic.elapsed_ms or 0,
+                diagnostic_id=diagnostic.diagnostic_id,
+                code=diagnostic.code,
+                http_status=diagnostic.http_status,
+            )
+        return GatewayConnectionResult(
+            status="passed",
+            elapsed_ms=round((monotonic() - started_at) * 1000),
+        )
 
     async def check_chat_model(self, model: str) -> None:
         """Send a short chat completion to verify the configured model."""
@@ -157,21 +198,22 @@ class NewAPIGateway:
         endpoint: str,
         payload: dict | None = None,
     ) -> list[Any]:
-        result = await self._request_json(endpoint, payload)
-        if not isinstance(result.get("data"), list):
-            raise _gateway_failure(
-                endpoint,
-                "Gateway returned no model list or embedding vector.",
-                model=payload.get("model") if payload else None,
-            )
+        result = await self._request_json(endpoint, payload, expect_data=True)
         return result["data"]
 
     async def _request_json(
         self,
         endpoint: str,
         payload: dict | None = None,
+        *,
+        expect_data: bool = False,
     ) -> dict:
         model = payload.get("model") if payload else None
+        started_at = monotonic()
+        response = None
+        invalid_response_detail = (
+            "The gateway did not return a valid response."
+        )
         try:
             async with asyncio.timeout(12), httpx.AsyncClient(
                 headers={"Authorization": f"Bearer {self._api_key}"},
@@ -190,26 +232,32 @@ class NewAPIGateway:
                     or result.get("success") is False
                 ):
                     raise ValueError("Invalid gateway response")
+                if expect_data and not isinstance(result.get("data"), list):
+                    invalid_response_detail = (
+                        "Gateway returned no model list or embedding vector."
+                    )
+                    raise ValueError(invalid_response_detail)
                 return result
-        except (httpx.TimeoutException, TimeoutError) as exc:
-            raise _gateway_failure(
-                endpoint,
-                "The gateway timed out.",
+        except (
+            httpx.HTTPError,
+            httpx.InvalidURL,
+            TimeoutError,
+            ValueError,
+        ) as exc:
+            diagnostic = log_upstream_failure(
+                exc,
+                operation="gateway",
+                started_at=started_at,
+                url=self._base_url,
+                endpoint=endpoint,
                 model=model,
-                cause=exc,
-                status_code=504,
-            ) from exc
-        except httpx.HTTPStatusError as exc:
-            raise _gateway_failure(
-                endpoint,
-                f"Gateway returned HTTP {exc.response.status_code}.",
-                model=model,
-                cause=exc,
-            ) from exc
-        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
-            raise _gateway_failure(
-                endpoint,
-                "The gateway did not return a valid response.",
-                model=model,
-                cause=exc,
-            ) from exc
+                response=response,
+            )
+            if diagnostic.code == "timeout":
+                status_code, detail = 504, "The gateway timed out."
+            elif isinstance(exc, httpx.HTTPStatusError):
+                status_code = 502
+                detail = f"Gateway returned HTTP {exc.response.status_code}."
+            else:
+                status_code, detail = 502, invalid_response_detail
+            raise GatewayRequestError(status_code, detail, diagnostic) from exc
