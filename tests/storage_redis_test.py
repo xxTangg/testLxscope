@@ -2121,3 +2121,32 @@ class TestSOP(IsolatedAsyncioTestCase):
                 "artifacts": [],
             },
         )
+
+
+class TestRecordKeyTTL(IsolatedAsyncioTestCase):
+    """Record writes set the expiration in the same command."""
+
+    async def _value_and_ttl(self, key: str) -> tuple[str | None, int]:
+        client = self.storage._client
+        return await client.get(key), await client.ttl(key)
+
+    async def asyncSetUp(self) -> None:
+        self.storage = make_storage()
+        self.addAsyncCleanup(self.storage._client.aclose)
+
+    async def test_failure_after_set_cannot_drop_ttl(self) -> None:
+        """A failing EXPIRE cannot leave the rewritten key persistent."""
+        self.storage.key_ttl = 60
+        await self.storage._client.set("probe", "old", ex=60)
+
+        with patch.object(
+            self.storage._client,
+            "expire",
+            side_effect=ConnectionError("injected"),
+        ):
+            await self.storage._set_with_ttl("probe", "new")
+
+        result = await self._value_and_ttl("probe")
+        self.assertEqual(result[0], "new")
+        self.assertGreater(result[1], 0)
+        self.assertLessEqual(result[1], 60)

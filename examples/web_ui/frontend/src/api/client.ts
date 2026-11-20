@@ -72,7 +72,11 @@ async function extractErrorDetail(res: Response): Promise<string> {
 	return text || res.statusText;
 }
 
-async function streamRequest(path: string, options: RequestOptions = {}): Promise<Response> {
+async function request<T>(
+	path: string,
+	options: RequestOptions,
+	read: (response: Response) => T | Promise<T>,
+): Promise<T> {
 	const {
 		method = 'GET',
 		body,
@@ -87,29 +91,38 @@ async function streamRequest(path: string, options: RequestOptions = {}): Promis
 		Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
 	}
 
-	// AbortSignal.timeout aborts with a TimeoutError, which is what lets the
-	// catch below tell "too slow" apart from the caller's own cancellation.
-	const deadline = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
-	const combined =
-		deadline && signal ? AbortSignal.any([signal, deadline]) : (deadline ?? signal);
-
-	let res: Response;
+	// Chromium 102 supports AbortController but lacks the AbortSignal helpers.
+	const controller = timeoutMs ? new AbortController() : undefined;
+	const abortFromCaller = () => controller?.abort(signal?.reason);
+	if (controller && signal) {
+		if (signal.aborted) abortFromCaller();
+		else signal.addEventListener('abort', abortFromCaller, { once: true });
+	}
+	const requestSignal = controller?.signal ?? signal;
+	const timeoutReason = new DOMException('The request timed out.', 'TimeoutError');
+	const timer = controller && setTimeout(() => controller.abort(timeoutReason), timeoutMs);
+	let receivedResponse = false;
 	try {
-		res = await fetch(url.toString(), {
+		const res = await fetch(url.toString(), {
 			method,
 			headers: buildHeaders(body !== undefined, authenticated),
 			body: body ? JSON.stringify(body) : undefined,
-			signal: combined,
+			signal: requestSignal,
 		});
+		receivedResponse = true;
+		if (!res.ok) {
+			const detail = await extractErrorDetail(res);
+			const error = new ApiError(res.status, detail);
+			if (res.status === 401 && authenticated && getAccessToken()) {
+				window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
+			}
+			if (!silent) toast.error(error.message);
+			throw error;
+		}
+		return await read(res);
 	} catch (e) {
-		// An abort is the caller's own doing — pass it through untouched.
-		if (e instanceof DOMException && e.name === 'AbortError') throw e;
-		// A server that accepts the connection then stalls would otherwise
-		// leave the caller waiting forever.
-		const timedOut = e instanceof DOMException && e.name === 'TimeoutError';
-		// Otherwise fetch only rejects when the request never reached the
-		// server: wrong address, DNS failure, refused connection, blocked
-		// preflight. Status 0 distinguishes that from any HTTP-level failure.
+		const timedOut = requestSignal?.reason === timeoutReason;
+		if (!timedOut && (requestSignal?.aborted || receivedResponse)) throw e;
 		const error = timedOut
 			? new ApiError(TIMEOUT_STATUS, 'The server took too long to respond.')
 			: new ApiError(
@@ -118,25 +131,16 @@ async function streamRequest(path: string, options: RequestOptions = {}): Promis
 				);
 		if (!silent) toast.error(error.message);
 		throw error;
+	} finally {
+		clearTimeout(timer);
+		if (controller) signal?.removeEventListener('abort', abortFromCaller);
 	}
-
-	if (!res.ok) {
-		const detail = await extractErrorDetail(res);
-		const error = new ApiError(res.status, detail);
-		if (res.status === 401 && authenticated && getAccessToken()) {
-			window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
-		}
-		if (!silent) toast.error(error.message);
-		throw error;
-	}
-
-	return res;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-	const res = await streamRequest(path, options);
-	if (res.status === 204) return undefined as T;
-	return res.json() as Promise<T>;
+function requestJson<T>(path: string, options: RequestOptions): Promise<T> {
+	return request(path, options, (res) =>
+		res.status === 204 ? (undefined as T) : (res.json() as Promise<T>),
+	);
 }
 
 export const client = {
@@ -149,7 +153,7 @@ export const client = {
 			authenticated?: boolean;
 			timeoutMs?: number;
 		},
-	) => request<T>(path, { method: 'GET', params, ...options }),
+	) => requestJson<T>(path, { method: 'GET', params, ...options }),
 	post: <T>(
 		path: string,
 		body?: unknown,
@@ -160,14 +164,16 @@ export const client = {
 			signal?: AbortSignal;
 			timeoutMs?: number;
 		},
-	) => request<T>(path, { method: 'POST', body, params, ...options }),
+	) => requestJson<T>(path, { method: 'POST', body, params, ...options }),
 	patch: <T>(
 		path: string,
 		body?: unknown,
 		params?: Record<string, string>,
 		options?: { silent?: boolean },
-	) => request<T>(path, { method: 'PATCH', body, params, silent: options?.silent }),
+	) => requestJson<T>(path, { method: 'PATCH', body, params, silent: options?.silent }),
 	delete: <T = void>(path: string, params?: Record<string, string>) =>
-		request<T>(path, { method: 'DELETE', params }),
-	stream: (path: string, options?: RequestOptions) => streamRequest(path, options),
+		requestJson<T>(path, { method: 'DELETE', params }),
+	blob: (path: string, options: RequestOptions = {}) =>
+		request(path, options, (res) => res.blob()),
+	stream: (path: string, options: RequestOptions = {}) => request(path, options, (res) => res),
 };

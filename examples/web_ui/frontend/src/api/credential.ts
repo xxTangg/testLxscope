@@ -17,10 +17,15 @@ export interface NewApiModelCandidate {
 	capabilities_known: boolean;
 }
 
-export type GatewayConnectionResult = { elapsed_ms: number } & (
-	| { status: 'passed' }
-	| { status: 'failed'; code: string; diagnostic_id: string; http_status: number | null }
-);
+export interface ModelCheckResult {
+	model: string;
+	status: 'passed' | 'failed';
+	detail: string;
+	code?: string;
+	http_status?: number;
+	diagnostic_id?: string;
+	verification?: string;
+}
 
 export const credentialApi = {
 	list: async (): Promise<CredentialListResponse> => {
@@ -43,18 +48,18 @@ export const credentialApi = {
 	setEnabled: (credentialId: string, enabled: boolean) =>
 		client.patch<CredentialView>(`/credential/${credentialId}/enabled`, { enabled }),
 
-	checkConnection: (
-		body: { base_url: string; api_key?: string; credential_id?: string },
+	checkDraftModel: (
+		body: { base_url: string; api_key?: string; credential_id?: string; model: string },
 		signal: AbortSignal,
 	) =>
-		client.post<GatewayConnectionResult>('/credential/newapi/check-connection', body, undefined, {
+		client.post<ModelCheckResult>('/credential/newapi/check-model', body, undefined, {
 			signal,
 			silent: true,
 			timeoutMs: 15_000,
 		}),
 
 	checkModel: (credentialId: string, model: string, signal: AbortSignal) =>
-		client.post<{ model: string; status: 'passed' | 'failed'; detail: string }>(
+		client.post<ModelCheckResult>(
 			`/credential/${credentialId}/check-model`,
 			{ model },
 			undefined,

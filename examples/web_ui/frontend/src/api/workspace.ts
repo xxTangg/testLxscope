@@ -158,17 +158,23 @@ export const workspaceApi = {
 		previewUrl: (agentId: string, sessionId: string, path: string) =>
 			workspaceFileUrl(agentId, sessionId, path, false, true),
 		/** Extract a bounded text preview with the configured document parsers. */
-		previewText: (agentId: string, sessionId: string, path: string) =>
+		previewText: (agentId: string, sessionId: string, path: string, signal?: AbortSignal) =>
 			client.get<{ text: string; truncated: boolean; mode: 'document' | 'text' | 'hex' }>(
 				'/workspace/files/preview-text',
 				{ agent_id: agentId, session_id: sessionId, path },
-				{ silent: true },
+				{ silent: true, signal, timeoutMs: 60_000 },
 			),
-		/** Convert an Office file to a PDF stream for inline preview. */
-		previewOfficePdf: (agentId: string, sessionId: string, path: string) =>
-			client.stream('/workspace/files/preview-pdf', {
+		/** Convert an Office file to a PDF for inline preview. */
+		previewOfficePdf: (
+			agentId: string,
+			sessionId: string,
+			path: string,
+			signal?: AbortSignal,
+		) =>
+			client.blob('/workspace/files/preview-pdf', {
 				params: { agent_id: agentId, session_id: sessionId, path },
 				silent: true,
+				signal,
 				timeoutMs: 60_000,
 			}),
 	},

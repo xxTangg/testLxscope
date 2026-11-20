@@ -239,8 +239,8 @@ class RedisMessageBus(MessageBus):  # pylint: disable=too-many-public-methods
                 field of a Redis Stream entry.
             ttl_secs (`int | None`, optional):
                 If set, refresh the key's expiry on every push
-                (sliding TTL). ``None`` means no TTL — the queue
-                persists until drained or deleted explicitly.
+                (sliding TTL). ``None`` leaves an existing expiry
+                unchanged; a new key has no expiry.
 
         Returns:
             `str`:
@@ -400,8 +400,12 @@ class RedisMessageBus(MessageBus):  # pylint: disable=too-many-public-methods
         if before_id is None:
             await self._client.delete(key)
             return
-        # XTRIM MINID drops entries with id < before_id.
-        await self._client.xtrim(key, minid=before_id)
+        # Approximate trimming can leave entries older than the cursor.
+        await self._client.xtrim(
+            key,
+            minid=before_id,
+            approximate=False,
+        )
 
     # ------------------------------------------------------------------
     # Mode F — registry map (hash-keyed namespace)

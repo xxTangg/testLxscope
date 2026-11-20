@@ -339,6 +339,7 @@ class RealtimeAgent:
         """Surface a crashed downlink instead of a silently dead session."""
         if task.cancelled() or task.exception() is None:
             return
+        self._downlink = None
         self._connected = False
         self._connected_event.clear()
         logger.error(
@@ -427,9 +428,10 @@ class RealtimeAgent:
             self._pump_uplink(transport),
             name="rt-up",
         )
+        getter: asyncio.Task[_QueuedEvent] | None = None
         try:
             while not uplink.done():
-                getter = asyncio.ensure_future(self._out.get())
+                getter = asyncio.create_task(self._out.get())
                 done, _ = await asyncio.wait(
                     {getter, uplink},
                     return_when=asyncio.FIRST_COMPLETED,
@@ -452,6 +454,8 @@ class RealtimeAgent:
             # events that produced (the interrupted ReplyEnd) before the
             # stream ends rather than leaking them into the next run.
             await self._barge_in()
+            self._end_user_turn()
+            self._user_turn = ""
             while not self._out.empty():
                 queued = self._out.get_nowait()
                 self._yielded_checkpoint = (
@@ -467,10 +471,16 @@ class RealtimeAgent:
             if not uplink.cancelled() and uplink.exception() is not None:
                 raise uplink.exception()  # type: ignore[misc]
         finally:
-            if not uplink.done():
-                uplink.cancel()
-                await asyncio.gather(uplink, return_exceptions=True)
-            self._transport = None
+            try:
+                tasks = [uplink] if getter is None else [uplink, getter]
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                self._end_user_turn()
+                self._user_turn = ""
+                self._transport = None
 
     # ------------------------------------------------------------------
     # Discrete input
@@ -512,7 +522,7 @@ class RealtimeAgent:
                     if isinstance(inputs, str)
                     else inputs
                 )
-                text = msg.get_text_content() or ""
+                text = msg.get_text_content()
                 await self._barge_in()
                 # A typed turn reconnects the session the way audio does,
                 # and takes the audio kept meanwhile along with it.
@@ -842,13 +852,13 @@ class RealtimeAgent:
         context = self.state.context
         if context and context[-1].role == "assistant":
             tail = context[-1]
-            if not (tail.get_text_content() or "").strip() and all(
+            if not tail.get_text_content().strip() and all(
                 isinstance(b, TextBlock) for b in tail.content
             ):
                 context.pop()
         if not context or context[-1].role != "user":
             return False
-        previous = context[-1].get_text_content() or ""
+        previous = context[-1].get_text_content()
         context[-1].content = [TextBlock(text=f"{previous}{text}")]
         return True
 

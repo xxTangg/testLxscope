@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from agentscope.app._router._credential import (
     check_credential_model,
     check_newapi_connection,
+    check_newapi_model,
     credential_router,
     probe_newapi_embedding,
     set_credential_enabled,
@@ -29,6 +30,7 @@ from agentscope.app._router._knowledge_base import (
 from agentscope.app._router._model import list_models
 from agentscope.app._router._schema._credential import (
     CheckCredentialModelRequest,
+    NewAPIChatModelProbeRequest,
     NewAPIEmbeddingProbeRequest,
     NewAPIGatewayRequest,
     SetCredentialEnabledRequest,
@@ -41,6 +43,7 @@ from agentscope.app._router._schema._knowledge_base import (
 from agentscope.app.deps import (
     get_current_user_id,
     get_knowledge_base_service,
+    get_resource_access_service,
     get_storage,
 )
 from agentscope.app.access import DenyAllResourceAccessPolicy
@@ -68,6 +71,7 @@ _DATA = {
     "context_size": 65536,
     "output_size": 8192,
 }
+_VERIFICATION_SECRET = "test-model-verification-secret"
 
 
 class NewAPICredentialTest(TestCase):
@@ -99,7 +103,7 @@ class NewAPICredentialTest(TestCase):
         self.assertEqual(65536, cards[0].context_size)
         self.assertEqual(8192, cards[0].output_size)
 
-    def test_url_must_be_valid_and_model_selection_is_optional(self) -> None:
+    def test_invalid_url_and_existing_data_without_models(self) -> None:
         with self.assertRaises(ValidationError):
             NewAPICredential.model_validate(
                 {**_DATA, "base_url": "newapi.internal"}
@@ -195,7 +199,7 @@ class NewAPIModelTest(IsolatedAsyncioTestCase):
 
 
 class NewAPIGatewayTest(IsolatedAsyncioTestCase):
-    async def test_repeated_create_ignores_existing_id(self) -> None:
+    async def test_create_requires_verified_models_and_ignores_id(self) -> None:
         records = {}
 
         async def save(user_id, credential):
@@ -204,28 +208,110 @@ class NewAPIGatewayTest(IsolatedAsyncioTestCase):
 
         app = FastAPI()
         app.include_router(credential_router)
+        app.state.credential_verification_secret = _VERIFICATION_SECRET
         storage = MagicMock(upsert_credential=AsyncMock(side_effect=save))
         app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+        access = MagicMock()
+        app.dependency_overrides[get_resource_access_service] = lambda: access
         app.dependency_overrides[get_storage] = lambda: storage
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://app.test",
-        ) as client:
-            first = await client.post(
-                "/credential/", json={"data": {**_DATA, "name": "A"}}
-            )
-            first_id = first.json()["credential_id"]
-            second = await client.post(
-                "/credential/",
-                json={
-                    "data": {
-                        **_DATA,
-                        "id": first_id,
-                        "name": "B",
-                        "models": "model-b",
-                    }
-                },
-            )
+        with patch(
+            "agentscope.app._service._newapi.NewAPIGateway.check_chat_model",
+            new=AsyncMock(),
+        ) as probe:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://app.test",
+            ) as client:
+
+                async def verify(model: str) -> str:
+                    response = await client.post(
+                        "/credential/newapi/check-model",
+                        json={
+                            "base_url": _DATA["base_url"],
+                            "api_key": _DATA["api_key"],
+                            "model": model,
+                        },
+                    )
+                    self.assertEqual(200, response.status_code, response.text)
+                    return response.json()["verification"]
+
+                empty = await client.post(
+                    "/credential/",
+                    json={"data": {**_DATA, "models": "， "}},
+                )
+                self.assertEqual(422, empty.status_code)
+                pending = await client.post(
+                    "/credential/",
+                    json={"data": _DATA},
+                )
+                self.assertEqual(409, pending.status_code)
+                tokens = {"qwen3": await verify("qwen3")}
+                partial = await client.post(
+                    "/credential/",
+                    json={"data": _DATA, "model_verifications": tokens},
+                )
+                self.assertEqual(409, partial.status_code)
+                with patch(
+                    "agentscope.app._service._newapi._MODEL_VERIFICATION_TTL",
+                    -1,
+                ):
+                    expired_token = await verify("deepseek-v3")
+                expired = await client.post(
+                    "/credential/",
+                    json={
+                        "data": _DATA,
+                        "model_verifications": {
+                            **tokens,
+                            "deepseek-v3": expired_token,
+                        },
+                    },
+                )
+                self.assertEqual(409, expired.status_code)
+                tokens["deepseek-v3"] = await verify("deepseek-v3")
+                for changes in (
+                    {"api_key": "other"},
+                    {"base_url": "https://other.test/v1"},
+                    {"models": "qwen3\nother-model"},
+                ):
+                    stale = await client.post(
+                        "/credential/",
+                        json={
+                            "data": {**_DATA, **changes},
+                            "model_verifications": tokens,
+                        },
+                    )
+                    self.assertEqual(409, stale.status_code)
+                app.dependency_overrides[get_current_user_id] = lambda: "user-2"
+                cross_user = await client.post(
+                    "/credential/",
+                    json={"data": _DATA, "model_verifications": tokens},
+                )
+                self.assertEqual(409, cross_user.status_code)
+                app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+                storage.upsert_credential.assert_not_awaited()
+
+                first = await client.post(
+                    "/credential/",
+                    json={
+                        "data": {**_DATA, "name": "A"},
+                        "model_verifications": tokens,
+                    },
+                )
+                self.assertEqual(201, first.status_code, first.text)
+                first_id = first.json()["credential_id"]
+                second = await client.post(
+                    "/credential/",
+                    json={
+                        "data": {
+                            **_DATA,
+                            "id": first_id,
+                            "name": "B",
+                            "models": "model-b",
+                        },
+                        "model_verifications": {"model-b": await verify("model-b")},
+                    },
+                )
+            self.assertEqual(4, probe.await_count)
         self.assertEqual(201, first.status_code)
         self.assertEqual(201, second.status_code)
         second_id = second.json()["credential_id"]
@@ -235,7 +321,7 @@ class NewAPIGatewayTest(IsolatedAsyncioTestCase):
         self.assertEqual("B", records[second_id].name)
         self.assertEqual("model-b", records[second_id].models)
 
-    async def test_gateway_change_requires_model_confirmation(self) -> None:
+    async def test_gateway_change_requires_fresh_model_verification(self) -> None:
         previous = CredentialRecord(
             id="cred-1",
             user_id="user-1",
@@ -265,15 +351,36 @@ class NewAPIGatewayTest(IsolatedAsyncioTestCase):
                 "user-1",
                 storage,
                 access,
+                _VERIFICATION_SECRET,
             )
         self.assertEqual(409, error.exception.status_code)
         storage.upsert_credential.assert_not_awaited()
+        with patch(
+            "agentscope.app._service._newapi.NewAPIGateway.check_chat_model",
+            new=AsyncMock(),
+        ):
+            check = await check_newapi_model(
+                NewAPIChatModelProbeRequest(
+                    base_url=data["base_url"],
+                    api_key=data["api_key"],
+                    model="model-new",
+                    credential_id="cred-1",
+                ),
+                "user-1",
+                access,
+                _VERIFICATION_SECRET,
+            )
+        self.assertIsNotNone(check.verification)
         await update_credential(
             "cred-1",
-            UpdateCredentialRequest(data=data, models_confirmed=True),
+            UpdateCredentialRequest(
+                data=data,
+                model_verifications={"model-new": check.verification or ""},
+            ),
             "user-1",
             storage,
             access,
+            _VERIFICATION_SECRET,
         )
         saved = storage.upsert_credential.call_args.args[1]
         self.assertEqual("model-new", saved.models)
@@ -562,7 +669,6 @@ class NewAPIGatewayTest(IsolatedAsyncioTestCase):
         storage = MagicMock(upsert_credential=AsyncMock())
         data = {
             **record.data,
-            "models": "",
             "embedding_models": {"embed-alias": 768},
         }
         del data["api_key"]
@@ -572,11 +678,12 @@ class NewAPIGatewayTest(IsolatedAsyncioTestCase):
             "user-1",
             storage,
             access,
+            _VERIFICATION_SECRET,
         )
         owner, saved = storage.upsert_credential.call_args.args
         self.assertEqual("user-1", owner)
         self.assertEqual("test-token", saved.api_key.get_secret_value())
-        self.assertEqual([], saved.configured_models())
+        self.assertEqual(_DATA["models"], saved.models)
         self.assertEqual({"embed-alias": 768}, saved.embedding_models)
 
     async def test_kb_picker_creation_and_runtime_use_enabled_embedding(

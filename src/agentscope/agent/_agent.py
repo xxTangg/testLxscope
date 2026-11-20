@@ -23,7 +23,13 @@ from typing import (
 import jsonschema
 from pydantic import BaseModel
 
-from ._config import ContextConfig, ReActConfig, ModelConfig, InjectionConfig
+from ._config import (
+    ContextConfig,
+    ReActConfig,
+    ModelConfig,
+    InjectionConfig,
+    _validate_context_config_ratios,
+)
 from ..state import AgentState
 from ..state._state import ReplyContext
 from ._utils import _ToolCallBatch, Acting, Exit, Reasoning, _resolve_timezone
@@ -184,6 +190,8 @@ class Agent:
                 DeprecationWarning,
                 stacklevel=2,
             )
+            # Other agents may share the caller's config.
+            self.context_config = self.context_config.model_copy(deep=True)
             self.context_config.context_buffer_ratio = (
                 self.injection_config.context_buffer_ratio
             )
@@ -252,34 +260,10 @@ class Agent:
                 If the reserved/buffer ratios don't leave room ahead of the
                 context compression threshold.
         """
-        if (
-            self.context_config.reserve_ratio
-            >= self.context_config.trigger_ratio
-        ):
-            raise ValueError(
-                "The 'reserve_ratio' of the context config must be smaller "
-                "than its 'trigger_ratio', got "
-                f"{self.context_config.reserve_ratio} and "
-                f"{self.context_config.trigger_ratio}.",
-            )
-
-        # The buffer is only consumed by the runtime state injection and
-        # the compression tool, so it's checked only when one of them is on
-        if (
-            self.injection_config.inject_runtime_state
-            or self.context_config.compression_tool_enabled
-        ) and (
-            self.context_config.context_buffer_ratio
-            >= self.context_config.trigger_ratio
-        ):
-            raise ValueError(
-                "The 'context_buffer_ratio' of the context config must be "
-                "smaller than its 'trigger_ratio', so that the context "
-                "length is injected and the compression tool takes effect "
-                "before the hard compression, got "
-                f"{self.context_config.context_buffer_ratio} and "
-                f"{self.context_config.trigger_ratio}.",
-            )
+        _validate_context_config_ratios(
+            self.context_config,
+            self.injection_config.inject_runtime_state,
+        )
 
     # =======================================================================
     # Agent public methods
@@ -1134,6 +1118,9 @@ class Agent:
                     if isinstance(evt, ToolResultEndEvent):
                         self._record_tool_result(evt)
                     yield evt
+                # Count the round if this event completed its last tool call.
+                if not self.state.get_unfinished_tool_calls(self.name):
+                    self.state.cur_iter += 1
             else:
                 await self._handle_incoming_messages(msgs)
                 # Update the context with the incoming message and state
@@ -3199,8 +3186,13 @@ class Agent:
                 min(len(truncated_text), reserved_tokens),
             )
 
-            reserved_text = truncated_text[:reserved_tokens]
-            offload_text = truncated_text[reserved_tokens:]
+            reserved_text = await self._fit_text_prefix_to_token_limit(
+                reserved_blocks=reserved_blocks,
+                text=truncated_text,
+                upper_bound=reserved_tokens,
+                text_block_id=boundary_block.id,
+            )
+            offload_text = truncated_text[len(reserved_text) :]
 
             if reserved_text:
                 if (
@@ -3257,6 +3249,58 @@ class Agent:
         )
 
         return reserved_tool_result, offload_tool_result
+
+    async def _fit_text_prefix_to_token_limit(
+        self,
+        *,
+        reserved_blocks: list,
+        text: str,
+        upper_bound: int,
+        text_block_id: str,
+    ) -> str:
+        """Return the longest prefix of ``text`` that stays within the limit.
+
+        The proportional estimate uses the block's average token density,
+        which breaks when the prefix has a different script mix: a Chinese
+        prefix of an ASCII-first block is denser and used to exceed the
+        limit. Recount the candidate with the same counter and binary-search
+        the prefix length, only when the proportional estimate overshoots.
+        """
+        limit = self.context_config.tool_result_limit
+
+        def candidate(length: int) -> list:
+            prefix = text[:length]
+            if reserved_blocks and reserved_blocks[-1].type == "text":
+                merged = reserved_blocks[-1].model_copy(deep=True)
+                merged.text += prefix
+                return [*reserved_blocks[:-1], merged]
+            return [
+                *reserved_blocks,
+                TextBlock(text=prefix, id=text_block_id),
+            ]
+
+        async def fits(length: int) -> bool:
+            return (
+                await self.model.count_tokens(
+                    [AssistantMsg(self.name, content=candidate(length))],
+                    None,
+                )
+                <= limit
+            )
+
+        if await fits(upper_bound):
+            return text[:upper_bound]
+
+        low, high = 0, upper_bound
+        best = 0
+        while low <= high:
+            middle = (low + high) // 2
+            if await fits(middle):
+                best = middle
+                low = middle + 1
+            else:
+                high = middle - 1
+        return text[:best]
 
     # ======================================================================
     # Agent internal utility methods
@@ -4068,6 +4112,8 @@ class Agent:
                     yield ToolResultDataDeltaEvent(
                         reply_id=self.state.reply_id,
                         tool_call_id=tool_call_id,
+                        # Keep the block id so replay groups one payload.
+                        block_id=block.id,
                         media_type=block.source.media_type,
                         data=block.source.data,
                     )
@@ -4075,6 +4121,7 @@ class Agent:
                     yield ToolResultDataDeltaEvent(
                         reply_id=self.state.reply_id,
                         tool_call_id=tool_call_id,
+                        block_id=block.id,
                         media_type=block.source.media_type,
                         url=str(block.source.url),
                     )

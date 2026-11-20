@@ -215,6 +215,11 @@ async def get_download_secret(request: Request) -> str:
     return request.app.state.download_secret
 
 
+async def get_credential_verification_secret(request: Request) -> str:
+    """Return the secret that signs successful credential model checks."""
+    return request.app.state.credential_verification_secret
+
+
 async def get_extra_agent_middlewares(
     request: Request,
 ) -> AgentMiddlewareFactory | None:

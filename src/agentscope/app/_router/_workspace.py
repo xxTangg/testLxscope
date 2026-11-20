@@ -279,7 +279,7 @@ async def upload_skill(
         workspace_service.validate_manifest(parsed, len(files))
     except (ValidationError, SkillUploadError) as e:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             str(e),
         ) from e
 
@@ -300,7 +300,7 @@ async def upload_skill(
         )
     except (SkillUploadError, ValueError) as e:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             str(e),
         ) from e
 

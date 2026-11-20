@@ -270,8 +270,7 @@ export function useMessages(
 					msgsRef.current = [...msgsRef.current, msg];
 					currentReplyRef.current = msg;
 				}
-				clearInterruptTimer();
-				setPhase('streaming');
+				setPhase((prev) => (prev === 'interrupting' ? prev : 'streaming'));
 			} else {
 				// Realtime providers may start the assistant response before the
 				// user's final transcription arrives. Route every identified event
@@ -280,7 +279,9 @@ export function useMessages(
 					? currentReplyRef.current?.id === event.reply_id
 						? currentReplyRef.current
 						: (msgsRef.current.find((message) => message.id === event.reply_id) ?? null)
-					: currentReplyRef.current;
+					: event.type === EventType.REPLY_END
+						? null
+						: currentReplyRef.current;
 				if (reply) {
 					appendEvent(reply, event);
 					// ``appendEvent`` mutates in place, which would leave
@@ -558,7 +559,7 @@ export function useMessages(
 			await sessionApi.interrupt(sessionId, agentId);
 		} catch (e) {
 			clearInterruptTimer();
-			setPhase((prev) => (prev === 'interrupting' ? 'idle' : prev));
+			setPhase((prev) => (prev === 'interrupting' ? 'streaming' : prev));
 			setError(e as Error);
 		}
 	}, [agentId, sessionId, clearInterruptTimer]);

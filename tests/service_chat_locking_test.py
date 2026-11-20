@@ -7,9 +7,14 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import AsyncGenerator
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from agentscope.agent import ContextConfig, ReActConfig
+from agentscope.app._manager import (
+    BackgroundTaskManager,
+    CancelDispatcher,
+    ChatRunRegistry,
+)
 from agentscope.app._service import ChatService
 from agentscope.app.message_bus import InMemoryMessageBus, MessageBusKeys
 from agentscope.app.storage import (
@@ -216,6 +221,49 @@ async def _get_model(*_: object, **__: object) -> object:
 
 class TestChatServiceSessionLock(IsolatedAsyncioTestCase):
     """Verify mutable session state is loaded after lock acquisition."""
+
+    async def test_stop_during_chat_setup_publishes_reply_end(self) -> None:
+        """Stopping before the first reply still terminates the UI stream."""
+        session = SessionRecord(
+            id="session-1",
+            user_id="user-1",
+            agent_id="agent-1",
+            config=SessionConfig(workspace_id="workspace-1"),
+        )
+        setup_started = asyncio.Event()
+
+        async def wait_during_setup(*_: object) -> None:
+            setup_started.set()
+            await asyncio.Event().wait()
+
+        bus = InMemoryMessageBus()
+        registry = ChatRunRegistry()
+        background = BackgroundTaskManager(message_bus=bus)
+        service = ChatService(
+            storage=_Storage(session),
+            workspace_manager=object(),
+            scheduler_manager=object(),
+            background_task_manager=background,
+            message_bus=bus,
+            resource_access_service=SimpleNamespace(
+                resolve_agent=AsyncMock(side_effect=wait_during_setup),
+            ),
+        )
+        async with CancelDispatcher(bus, registry, background):
+            task = registry.spawn(
+                service.run(session.user_id, session.id, session.agent_id),
+                session_id=session.id,
+            )
+            await asyncio.wait_for(setup_started.wait(), timeout=2)
+            await service.interrupt(session.user_id, session.id, session.agent_id)
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(task), timeout=2)
+
+        events = await bus.log_read(MessageBusKeys.session_events(session.id))
+        self.assertEqual(len(events), 1)
+        event = events[0][1]
+        self.assertEqual(event["finished_reason"], "interrupted")
+        self.assertEqual(event["reply_id"], "")
 
     async def test_waiter_loads_state_persisted_by_preceding_holder(
         self,

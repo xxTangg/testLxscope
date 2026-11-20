@@ -1,56 +1,50 @@
+import { CronDate } from 'cron-parser';
+import { format } from 'date-fns';
+
+/** Convert picker date/time in the task's zone, rejecting gaps and choosing the first fold. */
+export function getScheduleStartAt(date: Date, time: string, timezone: string): string {
+	if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+		throw new Error('Invalid start time. Please enter a time in HH:mm format.');
+	}
+	const local = `${format(date, 'yyyy-MM-dd')}T${time}:00.000`;
+	const parsed = new CronDate(local, timezone);
+	const wallTime = Date.parse(`${local}Z`);
+	// Sample both sides of a transition, including non-hour offset changes.
+	// Date objects prevent CronDate from treating timestamp zero as missing.
+	const day = 24 * 60 * 60 * 1000;
+	const offsets = new Set(
+		[-day, 0, day].map((delta) =>
+			new CronDate(new Date(parsed.getTime() + delta), timezone).getUTCOffset(),
+		),
+	);
+	const candidates = [...offsets]
+		.map((offset) => new CronDate(new Date(wallTime - offset * 60 * 1000), timezone))
+		.filter(
+			(candidate) => candidate.getTime() + candidate.getUTCOffset() * 60 * 1000 === wallTime,
+		);
+	if (!candidates.length) {
+		throw new Error(
+			'The selected start time does not exist in the task time zone. Please choose another time.',
+		);
+	}
+	return new Date(Math.min(...candidates.map((candidate) => candidate.getTime()))).toISOString();
+}
+
+/** Convert a picker date to the inclusive end of that day in the task's timezone. */
+export function getScheduleEndAt(date: Date | undefined, timezone: string): string | undefined {
+	if (!date) return undefined;
+	// Preserve the calendar date selected in the browser, not its midnight instant.
+	const end = new CronDate(format(date, 'yyyy-MM-dd'), timezone);
+	end.setEndOfDay();
+	return end.toDate().toISOString();
+}
+
 export interface ParsedSchedule {
 	frequency: 'daily' | 'weekly' | 'monthly' | 'once' | 'custom';
 	time: string; // HH:mm format
 	weekday?: number; // 0-6 for weekly
 	dayOfMonth?: number; // 1-31 for monthly
 	date?: Date; // for once
-}
-
-function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
-	const parts = new Intl.DateTimeFormat('en-US', {
-		timeZone,
-		calendar: 'iso8601',
-		numberingSystem: 'latn',
-		year: 'numeric',
-		month: '2-digit',
-		day: '2-digit',
-		hour: '2-digit',
-		minute: '2-digit',
-		second: '2-digit',
-		hourCycle: 'h23',
-	}).formatToParts(date);
-	const values = Object.fromEntries(
-		parts
-			.filter((part) => part.type !== 'literal')
-			.map((part) => [part.type, Number(part.value)]),
-	);
-	const asUtc = Date.UTC(
-		values.year,
-		values.month - 1,
-		values.day,
-		values.hour,
-		values.minute,
-		values.second,
-	);
-	return asUtc - date.getTime();
-}
-
-/**
- * Convert a date picked in the browser into the end of that calendar day in
- * the schedule's IANA timezone. The API stores an instant, while the picker
- * represents a timezone-independent calendar date.
- */
-export function endOfDayInTimeZone(date: Date, timeZone: string): string {
-	const wallTime = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59);
-	let utcTime = wallTime;
-
-	// Recalculate once after applying the offset so dates near a DST change use
-	// the offset that is actually in effect at the requested local time.
-	for (let i = 0; i < 3; i += 1) {
-		utcTime = wallTime - getTimeZoneOffsetMs(new Date(utcTime), timeZone);
-	}
-
-	return new Date(utcTime + 999).toISOString();
 }
 
 export function parseCronExpression(cronExpression: string, startedAt: string): ParsedSchedule {

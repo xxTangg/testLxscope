@@ -2,7 +2,7 @@
 """Request / response schemas for the schedule router."""
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 from ...storage import (
     ScheduleRecord,
@@ -27,6 +27,12 @@ class CreateScheduleRequest(BaseModel):
         default="UTC",
         description="IANA timezone name, e.g. 'America/New_York' or "
         "'Asia/Shanghai'.",
+    )
+
+    started_at: AwareDatetime | None = Field(
+        default=None,
+        description="Inclusive start time with a UTC offset. Defaults to "
+        "the time at which the schedule is created.",
     )
 
     ended_at: datetime | None = Field(

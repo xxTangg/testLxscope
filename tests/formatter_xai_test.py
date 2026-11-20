@@ -7,7 +7,10 @@ dicts), a lightweight xai_sdk stub is built at module load so that tests run
 without the real package.  The stub objects support __eq__ and __repr__ so
 full assertListEqual comparisons work.
 """
+import base64
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 from types import ModuleType
 from unittest import IsolatedAsyncioTestCase
@@ -273,6 +276,40 @@ class TestXAIFormatter(  # pylint: disable=too-many-public-methods
                 user("What is the capital of Germany?"),
                 assistant("The capital of Germany is Berlin."),
                 user("What is the capital of Japan?"),
+            ],
+            res,
+        )
+
+    async def test_chat_formatter_percent_encoded_local_image(self) -> None:
+        """Local file:// image paths with spaces and '#' are decoded."""
+        image_bytes = b"spaced-name-bytes"
+        expected_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "my file #1.png"
+            path.write_bytes(image_bytes)
+            fmt = XAIChatFormatter()
+            res = await fmt.format(
+                [
+                    UserMsg(
+                        name="user",
+                        content=[
+                            TextBlock(text="What's in this image?"),
+                            DataBlock(
+                                source=URLSource(
+                                    url=path.as_uri(),
+                                    media_type="image/png",
+                                ),
+                            ),
+                        ],
+                    ),
+                ],
+            )
+        self.assertListEqual(
+            [
+                user(
+                    "What's in this image?",
+                    image(f"data:image/png;base64,{expected_b64}"),
+                ),
             ],
             res,
         )
@@ -617,6 +654,59 @@ class TestXAIFormatter(  # pylint: disable=too-many-public-methods
                     "assistant: The capital of Germany is Berlin.\n"
                     "user: What is the capital of Japan?\n"
                     "</history>",
+                ),
+            ],
+            res,
+        )
+
+    async def test_multiagent_hint_only_message_precedes_history(self) -> None:
+        """A hint-only message is emitted before following history."""
+        fmt = XAIMultiAgentFormatter()
+        msgs = [
+            AssistantMsg(
+                name="memory",
+                content=[HintBlock(hint="Remember the user's preference.")],
+            ),
+            UserMsg(name="alice", content="What should I remember?"),
+        ]
+
+        res = await fmt.format(msgs)
+
+        self.assertListEqual(
+            [
+                user("Remember the user's preference."),
+                user(
+                    fmt.conversation_history_prompt
+                    + "<history>\nalice: What should I remember?\n</history>",
+                ),
+            ],
+            res,
+        )
+
+    async def test_multiagent_hint_splits_mixed_history_in_order(self) -> None:
+        """A hint embedded in a message separates ordered history segments."""
+        fmt = XAIMultiAgentFormatter()
+        msg = AssistantMsg(
+            name="memory",
+            content=[
+                TextBlock(text="Context before the hint."),
+                HintBlock(hint="Keep this instruction."),
+                TextBlock(text="Context after the hint."),
+            ],
+        )
+
+        res = await fmt.format([msg])
+
+        self.assertListEqual(
+            [
+                user(
+                    fmt.conversation_history_prompt
+                    + "<history>\nmemory: Context before the hint.\n"
+                    + "</history>",
+                ),
+                user("Keep this instruction."),
+                user(
+                    "<history>\nmemory: Context after the hint.\n</history>",
                 ),
             ],
             res,

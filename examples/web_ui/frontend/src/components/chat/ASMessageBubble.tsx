@@ -29,6 +29,7 @@ import { renderToolCall } from './tool-renderers';
 import { countDiffStats, DiffStats, getResultDiff } from './tool-renderers/_shared';
 import type { TFunction, ToolCallWithResult } from './tool-renderers/types';
 import { workspaceApi } from '@/api';
+import { ApiError } from '@/api/client';
 import { DiagnosticReference } from '@/components/DiagnosticReference';
 import { Markdown } from '@/components/markdown';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -603,10 +604,14 @@ function WorkspacePreviewDialog({
 	const [previewTruncated, setPreviewTruncated] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [textOnly, setTextOnly] = useState(false);
 	const kind = file ? workspacePreviewKind(file) : 'raw';
-	const textTooLarge = kind === 'text' && (file?.size_bytes ?? 0) > 2 * 1024 * 1024;
-	const parsedPreviewTooLarge =
-		(kind === 'document' || kind === 'raw') && (file?.size_bytes ?? 0) > 10 * 1024 * 1024;
+	const pdfPreview = kind === 'pdf' || kind === 'document';
+	const preferText = pdfPreview && (textOnly || navigator.pdfViewerEnabled !== true);
+	const size = file?.size_bytes ?? 0;
+	const previewTooLarge =
+		(kind === 'text' && size > 2 * 1024 * 1024) ||
+		((kind === 'document' || kind === 'raw' || preferText) && size > 10 * 1024 * 1024);
 
 	useEffect(() => {
 		if (!open || !file) {
@@ -619,43 +624,55 @@ function WorkspacePreviewDialog({
 			return;
 		}
 
-		let cancelled = false;
+		const controller = new AbortController();
+		const { signal } = controller;
 		let objectPreviewUrl: string | null = null;
 		setPreviewUrl(null);
 		setText(null);
 		setPreviewMode(null);
 		setPreviewTruncated(false);
 		setError(null);
-		setLoading(false);
-		if (textTooLarge || parsedPreviewTooLarge) return;
-		setLoading(true);
+		setLoading(!previewTooLarge);
+		if (previewTooLarge) return;
+		const previewText = async () => {
+			const result = await workspaceApi.files.previewText(
+				context.agentId,
+				context.sessionId,
+				file.path,
+				signal,
+			);
+			if (signal.aborted) return;
+			setText(result.text);
+			setPreviewMode(result.mode);
+			setPreviewTruncated(result.truncated);
+		};
 		const load = async () => {
-			if (kind === 'document') {
-				const response = await workspaceApi.files.previewOfficePdf(
-					context.agentId,
-					context.sessionId,
-					file.path,
-				);
-				const objectUrl = URL.createObjectURL(await response.blob());
-				if (!cancelled) {
-					objectPreviewUrl = objectUrl;
-					setPreviewUrl(objectUrl);
-				} else {
-					URL.revokeObjectURL(objectUrl);
-				}
+			if (kind === 'raw' || kind === 'text' || preferText) {
+				await previewText();
 				return;
 			}
-
-			if (kind === 'raw' || kind === 'text') {
-				const result = await workspaceApi.files.previewText(
-					context.agentId,
-					context.sessionId,
-					file.path,
-				);
-				if (!cancelled) {
-					setText(result.text);
-					setPreviewMode(result.mode);
-					setPreviewTruncated(result.truncated);
+			if (kind === 'document') {
+				try {
+					const pdf = await workspaceApi.files.previewOfficePdf(
+						context.agentId,
+						context.sessionId,
+						file.path,
+						signal,
+					);
+					if (signal.aborted) return;
+					if (pdf.type !== 'application/pdf' || pdf.size === 0) {
+						throw new Error('Office preview did not return a PDF.');
+					}
+					objectPreviewUrl = URL.createObjectURL(pdf);
+					setPreviewUrl(objectPreviewUrl);
+				} catch (err) {
+					if (
+						signal.aborted ||
+						(err instanceof ApiError && [401, 403, 404].includes(err.status))
+					) {
+						throw err;
+					}
+					await previewText();
 				}
 				return;
 			}
@@ -665,32 +682,54 @@ function WorkspacePreviewDialog({
 				context.sessionId,
 				file.path,
 			);
-			if (!cancelled) {
+			if (!signal.aborted) {
 				setPreviewUrl(url);
 			}
 		};
 		load()
 			.catch((err) => {
-				if (!cancelled) setError((err as Error).message || String(err));
+				if (!signal.aborted) setError((err as Error).message || String(err));
 			})
 			.finally(() => {
-				if (!cancelled) setLoading(false);
+				if (!signal.aborted) setLoading(false);
 			});
 
 		return () => {
-			cancelled = true;
+			controller.abort();
 			if (objectPreviewUrl) URL.revokeObjectURL(objectPreviewUrl);
 		};
-	}, [open, file, kind, textTooLarge, parsedPreviewTooLarge, context.agentId, context.sessionId]);
+	}, [open, file, kind, preferText, previewTooLarge, context.agentId, context.sessionId]);
 
 	const filename = file?.name ?? t('messageBubble.previewFile');
+	const textUnavailable = pdfPreview && text !== null && (previewMode === 'hex' || !text.trim());
+	const isMarkdown = kind === 'text' && !!file && ['md', 'markdown'].includes(fileExtension(file));
+	const mediaLoadFailed = () => setError(t('messageBubble.previewUnsupported'));
 
 	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
+		<Dialog
+			open={open}
+			onOpenChange={(nextOpen) => {
+				if (!nextOpen) setTextOnly(false);
+				onOpenChange(nextOpen);
+			}}
+		>
 			<DialogContent className="flex h-[85vh] w-[95vw] !max-w-[1200px] flex-col gap-3">
 				<DialogHeader>
 					<DialogTitle className="truncate pr-8">{filename}</DialogTitle>
 					<DialogDescription>{t('messageBubble.previewDescription')}</DialogDescription>
+					<div className="flex flex-wrap gap-2">
+						{file && (
+							<Button variant="outline" size="sm" onClick={() => onDownload(file)}>
+								<Download className="size-4" />
+								{t('messageBubble.downloadFile')}
+							</Button>
+						)}
+						{pdfPreview && !preferText && text === null && !previewTooLarge && (
+							<Button variant="outline" size="sm" onClick={() => setTextOnly(true)}>
+								{t('messageBubble.previewAsText')}
+							</Button>
+						)}
+					</div>
 				</DialogHeader>
 				<div className="min-h-0 flex-1 overflow-auto rounded-md border bg-background">
 					{loading && (
@@ -704,46 +743,35 @@ function WorkspacePreviewDialog({
 							{t('messageBubble.previewFailed')}: {error}
 						</div>
 					)}
-					{textTooLarge && (
-						<div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-sm">
+					{previewTooLarge && (
+						<div className="text-muted-foreground flex h-full items-center justify-center p-6 text-center text-sm">
 							{t('messageBubble.previewTooLarge')}
-							<Button variant="outline" onClick={() => file && onDownload(file)}>
-								<Download className="size-4" />
-								{t('messageBubble.downloadFile')}
-							</Button>
 						</div>
 					)}
-					{parsedPreviewTooLarge && (
-						<div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-sm">
-							{t('messageBubble.previewTooLarge')}
-							<Button variant="outline" onClick={() => file && onDownload(file)}>
-								<Download className="size-4" />
-								{t('messageBubble.downloadFile')}
-							</Button>
+					{textUnavailable && (
+						<div className="text-muted-foreground flex h-full items-center justify-center p-6 text-center text-sm">
+							{t('messageBubble.previewUnsupported')}
 						</div>
 					)}
-					{kind === 'text' && text !== null && !error && (
+					{text !== null && !textUnavailable && !error && (
 						<div className="p-4">
-							{fileExtension(file!) === 'md' || fileExtension(file!) === 'markdown' ? (
-								<Markdown>{text}</Markdown>
-							) : (
-								<pre className="text-sm break-words whitespace-pre-wrap">{text}</pre>
-							)}
-							{previewTruncated && (
-								<p className="text-muted-foreground mt-3 text-xs">
-									{t('messageBubble.previewTruncated')}
+							{pdfPreview && (
+								<p className="text-muted-foreground mb-3 text-xs">
+									{t('messageBubble.previewTextDescription')}
 								</p>
 							)}
-						</div>
-					)}
-					{kind === 'raw' && text !== null && !error && (
-						<div className="p-4">
-							{previewMode === 'hex' && (
+							{kind === 'raw' && previewMode === 'hex' && (
 								<p className="text-muted-foreground mb-3 text-xs">
 									{t('messageBubble.previewBinary')}
 								</p>
 							)}
-							<pre className="text-sm break-words whitespace-pre-wrap">{text}</pre>
+							{isMarkdown ? (
+								<Markdown>{text}</Markdown>
+							) : (
+								<pre className="text-sm break-words whitespace-pre-wrap">
+									{text}
+								</pre>
+							)}
 							{previewTruncated && (
 								<p className="text-muted-foreground mt-3 text-xs">
 									{t('messageBubble.previewTruncated')}
@@ -760,25 +788,41 @@ function WorkspacePreviewDialog({
 							sandbox="allow-scripts"
 						/>
 					)}
-					{previewUrl && !error && kind === 'pdf' && (
-						<iframe src={previewUrl} title={filename} className="h-full w-full border-0" />
-					)}
-					{previewUrl && !error && kind === 'document' && (
-						<iframe src={previewUrl} title={filename} className="h-full w-full border-0" />
+					{previewUrl && !error && pdfPreview && !preferText && (
+						<iframe
+							src={previewUrl}
+							title={filename}
+							className="h-full w-full border-0"
+						/>
 					)}
 					{previewUrl && !error && kind === 'image' && (
 						<div className="flex h-full items-center justify-center overflow-auto p-4">
-							<img src={previewUrl} alt={filename} className="max-h-full max-w-full object-contain" />
+							<img
+								src={previewUrl}
+								alt={filename}
+								className="max-h-full max-w-full object-contain"
+								onError={mediaLoadFailed}
+							/>
 						</div>
 					)}
 					{previewUrl && !error && kind === 'audio' && (
 						<div className="flex h-full items-center justify-center p-6">
-							<audio controls src={previewUrl} className="w-full max-w-xl" />
+							<audio
+								controls
+								src={previewUrl}
+								className="w-full max-w-xl"
+								onError={mediaLoadFailed}
+							/>
 						</div>
 					)}
 					{previewUrl && !error && kind === 'video' && (
 						<div className="flex h-full items-center justify-center p-4">
-							<video controls src={previewUrl} className="max-h-full max-w-full" />
+							<video
+								controls
+								src={previewUrl}
+								className="max-h-full max-w-full"
+								onError={mediaLoadFailed}
+							/>
 						</div>
 					)}
 				</div>

@@ -702,7 +702,6 @@ export const CredentialPage = () => {
 			<CreateCredentialDialog
 				open={createOpen}
 				onOpenChange={setCreateOpen}
-				defaultType={NEW_API_CREDENTIAL_TYPE}
 				onCreated={(id) => setSelectedId(id)}
 			/>
 			{selected && (

@@ -205,14 +205,11 @@ class RedisStorage(StorageBase):
         return template.format(**kwargs)
 
     async def _set_with_ttl(self, key: str, value: str) -> None:
-        """SET a key and optionally apply the sliding TTL."""
-        await self._client.set(key, value)
-        await self._refresh_key_ttl(key)
-
-    async def _refresh_key_ttl(self, key: str) -> None:
-        """Apply the sliding TTL to a key, if configured."""
-        if self.key_ttl is not None:
-            await self._client.expire(key, self.key_ttl)
+        """Write the record and its expiry atomically."""
+        if self.key_ttl is not None and self.key_ttl <= 0:
+            await self._client.delete(key)
+        else:
+            await self._client.set(key, value, ex=self.key_ttl)
 
     async def __aenter__(self) -> Self:
         """Create the connection pool and Redis client.

@@ -13,6 +13,7 @@ from ._moonshot import MoonshotCredential
 from ._newapi import NewAPICredential
 from ._ollama import OllamaCredential
 from ._openai import OpenAICredential
+from ._typesafe import TypeSafeCredential
 from ._xai import XAICredential
 from ._volcengine import VolcengineCredential
 from ._base import CredentialBase
@@ -46,6 +47,7 @@ class CredentialFactory:
         NewAPICredential,
         OllamaCredential,
         OpenAICredential,
+        TypeSafeCredential,
         XAICredential,
         VolcengineCredential,
     ]

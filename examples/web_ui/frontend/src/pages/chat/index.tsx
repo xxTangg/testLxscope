@@ -405,7 +405,7 @@ const ChatPageInner = () => {
 																{/* Wider right gutter than the stock
 															    pr-8: the badge holds a mono timestamp. */}
 																<SidebarMenuButton
-																	className="text-muted-foreground hover:text-foreground group-has-data-[sidebar=menu-action]/menu-item:pr-16"
+																	className="text-muted-foreground hover:text-foreground group-has-data-[sidebar=menu-action]/menu-item:pr-16 no-has:pr-16"
 																	isActive={
 																		urlSessionId === session.id
 																	}
@@ -430,7 +430,7 @@ const ChatPageInner = () => {
 															    focus-within does not — otherwise clicking
 															    the row would pin it open. */}
 																<SidebarMenuBadge
-																	className="max-md:hidden group-hover/menu-item:hidden group-has-focus-visible/menu-item:hidden group-has-data-[state=open]/menu-item:hidden text-text-tertiary! font-mono"
+																	className="max-md:hidden group-hover/menu-item:hidden group-has-focus-visible/menu-item:hidden group-has-data-[state=open]/menu-item:hidden no-has:group-focus-within/menu-item:hidden text-text-tertiary! font-mono"
 																	title={`${formatSessionTime(session.created_at)} (UTC+08:00)`}
 																>
 																	{formatSessionTime(
@@ -440,7 +440,7 @@ const ChatPageInner = () => {
 																</SidebarMenuBadge>
 																<DropdownMenu>
 																	<DropdownMenuTrigger asChild>
-																		<SidebarMenuAction className="md:opacity-0 group-hover/menu-item:opacity-100 group-has-focus-visible/menu-item:opacity-100 aria-expanded:opacity-100 peer-data-active/menu-button:text-sidebar-accent-foreground">
+																		<SidebarMenuAction className="md:opacity-0 focus-visible:opacity-100 group-hover/menu-item:opacity-100 group-has-focus-visible/menu-item:opacity-100 aria-expanded:opacity-100 peer-data-active/menu-button:text-sidebar-accent-foreground">
 																			<Ellipsis />
 																		</SidebarMenuAction>
 																	</DropdownMenuTrigger>
@@ -497,7 +497,7 @@ const ChatPageInner = () => {
 														return (
 															<SidebarMenuItem key={session.id}>
 																<SidebarMenuButton
-																	className="text-muted-foreground hover:text-foreground group-has-data-[sidebar=menu-action]/menu-item:pr-16"
+																	className="text-muted-foreground hover:text-foreground group-has-data-[sidebar=menu-action]/menu-item:pr-16 no-has:pr-16"
 																	isActive={
 																		urlSessionId === session.id
 																	}
@@ -518,7 +518,7 @@ const ChatPageInner = () => {
 																	</span>
 																</SidebarMenuButton>
 																<SidebarMenuBadge
-																	className="max-md:hidden group-hover/menu-item:hidden group-has-focus-visible/menu-item:hidden group-has-data-[state=open]/menu-item:hidden text-text-tertiary! font-mono"
+																	className="max-md:hidden group-hover/menu-item:hidden group-has-focus-visible/menu-item:hidden group-has-data-[state=open]/menu-item:hidden no-has:group-focus-within/menu-item:hidden text-text-tertiary! font-mono"
 																	title={`${formatSessionTime(session.created_at)} (UTC+08:00)`}
 																>
 																	{formatSessionTime(
@@ -528,7 +528,7 @@ const ChatPageInner = () => {
 																</SidebarMenuBadge>
 																<DropdownMenu>
 																	<DropdownMenuTrigger asChild>
-																		<SidebarMenuAction className="md:opacity-0 group-hover/menu-item:opacity-100 group-has-focus-visible/menu-item:opacity-100 aria-expanded:opacity-100 peer-data-active/menu-button:text-sidebar-accent-foreground">
+																		<SidebarMenuAction className="md:opacity-0 focus-visible:opacity-100 group-hover/menu-item:opacity-100 group-has-focus-visible/menu-item:opacity-100 aria-expanded:opacity-100 peer-data-active/menu-button:text-sidebar-accent-foreground">
 																			<Ellipsis />
 																		</SidebarMenuAction>
 																	</DropdownMenuTrigger>

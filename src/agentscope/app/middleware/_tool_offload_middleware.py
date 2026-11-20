@@ -164,17 +164,30 @@ class ToolOffloadMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
         # ----------------------------------------------------------------
         # Wrap next_handler in a Task, draining output into a Queue
         # ----------------------------------------------------------------
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue | None = asyncio.Queue()
 
-        async def _drain_to_queue() -> None:
-            """Drain next_handler output into *queue*."""
+        async def _drain_to_queue() -> ToolResponse | None:
+            """Stream foreground events and retain the terminal response."""
+            response = None
             try:
                 async for item in next_handler(**input_kwargs):
-                    await queue.put(item)
+                    if isinstance(item, ToolResponse):
+                        response = item
+                    if queue is not None:
+                        queue.put_nowait(item)
+                    del item
             except Exception as exc:  # pylint: disable=broad-except
-                await queue.put(exc)
+                if queue is not None:
+                    queue.put_nowait(exc)
+                response = ToolResponse(
+                    id=tool_call.id,
+                    state=ToolResultState.ERROR,
+                    content=[TextBlock(text=str(exc))],
+                )
             finally:
-                await queue.put(_QUEUE_SENTINEL)
+                if queue is not None:
+                    queue.put_nowait(_QUEUE_SENTINEL)
+            return response
 
         drain_task: asyncio.Task = asyncio.create_task(_drain_to_queue())
 
@@ -185,47 +198,54 @@ class ToolOffloadMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
         deadline = loop.time() + self._timeout_secs
         pre_collected: list = []
         completed = False
+        offloading = False
 
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                break
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
 
-            try:
-                item = await asyncio.wait_for(
-                    queue.get(),
-                    timeout=remaining,
-                )
-            except asyncio.TimeoutError:
-                break
+                try:
+                    item = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError:
+                    break
 
-            if item is _QUEUE_SENTINEL:
-                completed = True
-                break
+                if item is _QUEUE_SENTINEL:
+                    completed = True
+                    break
+                if isinstance(item, BaseException):
+                    raise item
 
-            if isinstance(item, BaseException):
+                pre_collected.append(item)
+                if isinstance(item, ToolResponse):
+                    completed = True
+                    break
+
+            if completed:
+                for item in pre_collected:
+                    yield item
+                return
+            offloading = True
+        finally:
+            # Until registration succeeds, this reply owns the tool task.
+            if not offloading:
                 drain_task.cancel()
-                raise item
-
-            pre_collected.append(item)
-
-            # ToolResponse is always the terminal item from _acting_impl
-            if isinstance(item, ToolResponse):
-                completed = True
-                break
-
-        if completed:
-            for item in pre_collected:
-                yield item
-            drain_task.cancel()
-            return
+                await asyncio.gather(drain_task, return_exceptions=True)
 
         # ----------------------------------------------------------------
         # Timeout path: spawn deliverer, register drain_task, yield synthetic
         # ----------------------------------------------------------------
         session_id = agent.state.session_id
         tool_name = tool_call.name
-        snapshot = list(pre_collected)
+        # The background delivery consumes the terminal response from the
+        # task. Drop queued and already-read intermediate events on handoff.
+        queue = None
+        pre_collected.clear()
+        item = None
 
         logger.info(
             "Tool '%s' timed out after %.1fs, offloading to background: "
@@ -245,7 +265,7 @@ class ToolOffloadMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
             completion notification in those edge cases.
             """
             try:
-                await drain_task
+                response = await drain_task
             except asyncio.CancelledError:
                 logger.info(
                     "Background tool '%s' cancelled, skipping delivery: "
@@ -263,22 +283,6 @@ class ToolOffloadMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
                     exc_info=True,
                 )
                 return
-
-            remaining_items: list = []
-            while not queue.empty():
-                try:
-                    item = queue.get_nowait()
-                    if isinstance(item, ToolResponse):
-                        remaining_items.append(item)
-                        break
-                except asyncio.QueueEmpty:
-                    break
-
-            all_items = snapshot + remaining_items
-            response: ToolResponse | None = next(
-                (i for i in all_items if isinstance(i, ToolResponse)),
-                None,
-            )
 
             tool_call_id = tool_call.id
 
@@ -353,14 +357,19 @@ class ToolOffloadMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
                 payload=hint.model_dump(mode="json"),
             )
 
+        try:
+            task_id = await self._bg_manager.register_task(
+                asyncio_task=drain_task,
+                session_id=session_id,
+                agent_id=self._agent_id,
+                user_id=self._user_id,
+                tool_name=tool_name,
+            )
+        except BaseException:
+            drain_task.cancel()
+            await asyncio.gather(drain_task, return_exceptions=True)
+            raise
         asyncio.create_task(_deliver_when_done())
-        task_id = await self._bg_manager.register_task(
-            asyncio_task=drain_task,
-            session_id=session_id,
-            agent_id=self._agent_id,
-            user_id=self._user_id,
-            tool_name=tool_name,
-        )
 
         logger.info(
             "Synthetic ToolResponse yielded for offloaded tool '%s': "

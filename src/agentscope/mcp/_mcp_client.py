@@ -10,6 +10,7 @@ from contextlib import (
 from typing import Any, AsyncGenerator, ClassVar, TYPE_CHECKING
 from urllib.parse import urlsplit
 
+import anyio
 import httpx
 import mcp.types
 from mcp import ClientSession, stdio_client, StdioServerParameters
@@ -42,7 +43,7 @@ class MCPClient(BaseModel):
     Private attributes:
     - _client: The underlying MCP client context manager
     - _session: The MCP ClientSession (for stateful connections only)
-    - _stack: AsyncExitStack for managing connection lifecycle
+    - _lifecycle_task: Owns the stateful connection's async contexts
     - _is_connected: Connection state flag
     - _cached_tools: Cached list of tools
     - _http_client: The live HTTP client, while one is open
@@ -125,9 +126,15 @@ class MCPClient(BaseModel):
     # Private attributes
     _client: Any = PrivateAttr(default=None)
     _session: ClientSession | None = PrivateAttr(default=None)
-    _stack: AsyncExitStack | None = PrivateAttr(default=None)
+    _lifecycle_task: asyncio.Task[None] | None = PrivateAttr(default=None)
+    _close_requested: asyncio.Event | None = PrivateAttr(default=None)
     _is_connected: bool = PrivateAttr(default=False)
     _cached_tools: list[mcp.types.Tool] | None = PrivateAttr(default=None)
+    _tool_list_generation: int = PrivateAttr(default=0)
+    _discovery_task: asyncio.Task[list[mcp.types.Tool]] | None = PrivateAttr(
+        default=None,
+    )
+    _discovery_waiters: int = PrivateAttr(default=0)
     _http_client: httpx.AsyncClient | None = PrivateAttr(default=None)
     _static_headers: httpx.Headers | None = PrivateAttr(default=None)
     _runtime_headers: dict[str, str] = PrivateAttr(default_factory=dict)
@@ -322,7 +329,7 @@ class MCPClient(BaseModel):
         For stateless connections, this method does nothing.
 
         Raises:
-            RuntimeError: If already connected.
+            RuntimeError: If already connected or a connection is in progress.
         """
         if not self.is_stateful:
             logger.debug(
@@ -336,42 +343,88 @@ class MCPClient(BaseModel):
                 f"MCP '{self.name}' is already connected. "
                 "Call close() before reconnecting.",
             )
+        if self._lifecycle_task is not None:
+            if not self._lifecycle_task.done():
+                raise RuntimeError(
+                    f"MCP '{self.name}' connection is already in progress.",
+                )
+            if not self._lifecycle_task.cancelled():
+                self._lifecycle_task.exception()
 
-        # Transports are one-shot context managers. Recreate them before every
-        # connection so connect() -> close() -> connect() starts a fresh one.
-        if self._client is None:
-            if self.mcp_config.type == "http_mcp":
-                self._client = self._create_http_client()
-            else:
-                self._initialize_client()
-
-        assert self._client is not None
-        stack = AsyncExitStack()
-        self._stack = stack
-
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        close_requested = asyncio.Event()
+        self._close_requested = close_requested
+        task = asyncio.create_task(
+            self._run_connection(ready, close_requested),
+            name=f"mcp:{self.name}",
+        )
+        self._lifecycle_task = task
         try:
-            context = await stack.enter_async_context(self._client)
-            read_stream, write_stream = context[0], context[1]
-            self._session = ClientSession(read_stream, write_stream)
-            await stack.enter_async_context(self._session)
-            await self._session.initialize()
-
-            self._is_connected = True
-            logger.info("MCP connected: %s", self.name)
+            await asyncio.shield(ready)
         except BaseException:
-            # asyncio.CancelledError inherits BaseException, so a cancelled
-            # initialization must close every context entered so far. The
-            # close is shielded because an anyio cancel scope (a cancelled
-            # FastAPI request, for one) keeps cancelling every await inside
-            # it, which would otherwise abandon a live stdio subprocess.
-            try:
-                await asyncio.shield(stack.aclose())
-            finally:
-                self._client = None
-                self._stack = None
-                self._session = None
-                self._is_connected = False
+            if not ready.done():
+                ready.cancel()
+            if not task.done():
+                task.cancel()
+            with anyio.CancelScope(shield=True):
+                await asyncio.gather(task, return_exceptions=True)
+            self._lifecycle_task = None
+            self._close_requested = None
+            if not ready.cancelled():
+                ready.exception()
             raise
+
+    def _create_session(self, context: Any) -> ClientSession:
+        """Create an SDK 1.x session with tool-list notifications enabled."""
+        return ClientSession(
+            context[0],
+            context[1],
+            message_handler=self._handle_server_message,
+        )
+
+    async def _handle_server_message(self, message: Any) -> None:
+        """Invalidate cached tool descriptors when the server changes them."""
+        if isinstance(message, mcp.types.ServerNotification):
+            message = message.root
+        if isinstance(message, mcp.types.ToolListChangedNotification):
+            self._tool_list_generation += 1
+            self._cached_tools = None
+
+    async def _run_connection(
+        self,
+        ready: asyncio.Future[None],
+        close_requested: asyncio.Event,
+    ) -> None:
+        """Enter and exit the SDK contexts on the same task."""
+        try:
+            if self._client is None:
+                if self.mcp_config.type == "http_mcp":
+                    self._client = self._create_http_client()
+                else:
+                    self._initialize_client()
+            assert self._client is not None
+            async with AsyncExitStack() as stack:
+                context = await stack.enter_async_context(self._client)
+                self._session = await stack.enter_async_context(
+                    self._create_session(context),
+                )
+                await self._session.initialize()
+                if not ready.done():
+                    self._is_connected = True
+                    logger.info("MCP connected: %s", self.name)
+                    ready.set_result(None)
+                    await close_requested.wait()
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+            else:
+                raise
+        finally:
+            self._client = None
+            self._session = None
+            self._is_connected = False
+            self._tool_list_generation += 1
+            self._cached_tools = None
 
     async def close(self, ignore_errors: bool = True) -> None:
         """Close the MCP connection (for stateful connections only).
@@ -397,22 +450,20 @@ class MCPClient(BaseModel):
                 "Call connect() first.",
             )
 
+        task = self._lifecycle_task
+        assert task is not None and self._close_requested is not None
+        self._close_requested.set()
         try:
-            await self._stack.aclose()
-        except Exception as e:
+            await asyncio.shield(task)
+        except Exception as exc:
             if not ignore_errors:
-                raise e
-            logger.warning(
-                "Error closing MCP '%s': %s",
-                self.name,
-                str(e),
-            )
+                raise
+            logger.warning("Error closing MCP '%s': %s", self.name, exc)
         finally:
-            self._client = None
-            self._stack = None
-            self._session = None
-            self._is_connected = False
-            logger.info("MCP closed: %s", self.name)
+            if task.done() and self._lifecycle_task is task:
+                self._lifecycle_task = None
+                self._close_requested = None
+        logger.info("MCP closed: %s", self.name)
 
     def _get_client_gen(self) -> AbstractAsyncContextManager[Any]:
         """Get client generator for stateless connections."""
@@ -436,24 +487,7 @@ class MCPClient(BaseModel):
         Raises:
             RuntimeError: If not connected (for stateful connections).
         """
-        if not self.is_stateful:
-            # Stateless: create temporary session
-            async with self._get_client_gen() as cli:
-                read_stream, write_stream = cli[0], cli[1]
-                async with ClientSession(
-                    read_stream,
-                    write_stream,
-                ) as session:
-                    await session.initialize()
-                    res = await session.list_tools()
-                    self._cached_tools = res.tools
-        else:
-            # Stateful: use existing session
-            self._validate_connection()
-            res = await self._session.list_tools()
-            self._cached_tools = res.tools
-
-        available_tools: list = self._cached_tools
+        available_tools = await self._discover_tools()
         if self.enable_tools is not None:
             available_tools = [
                 tool
@@ -465,6 +499,51 @@ class MCPClient(BaseModel):
                 _ for _ in available_tools if _.name not in self.disable_tools
             ]
         return available_tools
+
+    async def _discover_tools(self) -> list[mcp.types.Tool]:
+        """Share stateless discovery without sharing caller cancellation."""
+        if self.is_stateful:
+            return await self._fetch_tools()
+
+        task = self._discovery_task
+        if task is None or task.done():
+            task = asyncio.create_task(self._fetch_tools())
+            self._discovery_task = task
+            self._discovery_waiters = 0
+        self._discovery_waiters += 1
+        try:
+            return await asyncio.shield(task)
+        finally:
+            if self._discovery_task is task:
+                self._discovery_waiters -= 1
+                if self._discovery_waiters == 0:
+                    self._discovery_task = None
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                    elif not task.cancelled():
+                        task.exception()
+
+    async def _fetch_tools(self) -> list[mcp.types.Tool]:
+        """Retry once if a notification invalidates an in-flight listing."""
+        for _ in range(2):
+            if self.is_stateful:
+                self._validate_connection()
+                generation = self._tool_list_generation
+                result = await self._session.list_tools()
+            else:
+                async with self._get_client_gen() as context:
+                    async with self._create_session(context) as session:
+                        await session.initialize()
+                        generation = self._tool_list_generation
+                        result = await session.list_tools()
+            if generation == self._tool_list_generation:
+                self._cached_tools = result.tools
+                return result.tools
+        raise RuntimeError(
+            f"MCP '{self.name}' tool list changed during discovery; "
+            "retry the lookup.",
+        )
 
     async def list_tools(self) -> list[ToolBase]:
         """List available tools from the MCP server as wrapped
@@ -505,17 +584,10 @@ class MCPClient(BaseModel):
         # Avoid circular import by importing here
         from ..tool import MCPTool
 
-        # Fetch tools if not cached. Use list_raw_tools() to avoid the
-        # recursion list_tools() → get_tool() → list_tools().
-        if self._cached_tools is None:
-            await self.list_raw_tools()
-
-        # Find target tool
-        target_tool = None
-        for tool in self._cached_tools:
-            if tool.name == name:
-                target_tool = tool
-                break
+        tools = self._cached_tools
+        if tools is None:
+            tools = await self._discover_tools()
+        target_tool = next((tool for tool in tools if tool.name == name), None)
 
         if target_tool is None:
             raise ValueError(

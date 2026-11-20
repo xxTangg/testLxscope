@@ -1,7 +1,14 @@
 # -*- coding: utf-8 -*-
 """Request / response schemas for the credential router."""
-from pydantic import BaseModel, Field, SecretStr, field_validator
-from typing import Literal
+from typing import Annotated, Literal
+
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    StringConstraints,
+    field_validator,
+)
 
 from ..._service import CredentialView
 from ....credential import NewAPICredential
@@ -11,6 +18,7 @@ class CreateCredentialRequest(BaseModel):
     """Request body for creating a new credential."""
 
     data: dict = Field(description="Credential payload (e.g. API keys).")
+    model_verifications: dict[str, str] = Field(default_factory=dict)
 
 
 class CreateCredentialResponse(BaseModel):
@@ -25,7 +33,7 @@ class UpdateCredentialRequest(BaseModel):
     """Request body for updating an existing credential."""
 
     data: dict = Field(description="New credential payload.")
-    models_confirmed: bool = False
+    model_verifications: dict[str, str] = Field(default_factory=dict)
 
 
 class SetCredentialEnabledRequest(BaseModel):
@@ -46,6 +54,10 @@ class CheckCredentialModelResponse(BaseModel):
     model: str
     status: Literal["passed", "failed"]
     detail: str = ""
+    code: str | None = None
+    http_status: int | None = None
+    diagnostic_id: str | None = None
+    verification: str | None = None
 
 
 class ListCredentialsResponse(BaseModel):
@@ -82,6 +94,19 @@ class NewAPIEmbeddingProbeRequest(NewAPIGatewayRequest):
     """Discover an embedding model's native vector dimension."""
 
     model: str = Field(min_length=1)
+
+
+class NewAPIChatModelProbeRequest(NewAPIGatewayRequest):
+    """Test one chat model with a gateway configuration before saving it."""
+
+    model: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            pattern=r"^[^\r\n,，]+$",
+        ),
+    ]
 
 
 class NewAPIEmbeddingProbeResponse(BaseModel):

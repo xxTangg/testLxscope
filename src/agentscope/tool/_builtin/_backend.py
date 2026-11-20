@@ -877,6 +877,12 @@ class LocalBackend(BackendBase):
     # OS is the host OS.
     os_name = os.name
 
+    def __init__(self, workdir: str | None = None) -> None:
+        """Use the given directory as the base of workspace searches."""
+        self._workdir = (
+            os.path.abspath(workdir) if workdir is not None else None
+        )
+
     @asynccontextmanager
     async def open_read(
         self, path: str, *, root: str
@@ -942,6 +948,8 @@ class LocalBackend(BackendBase):
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
+                # Inheriting a stdin pipe can hang CPython startup on Windows.
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 **kwargs,
@@ -1051,13 +1059,8 @@ class LocalBackend(BackendBase):
                 yield chunk
 
     async def getcwd(self) -> str:
-        """Return the host process's current working directory.
-
-        Returns:
-            `str`:
-                ``os.getcwd()`` — avoids spawning a ``pwd`` subprocess.
-        """
-        return os.getcwd()
+        """Return the workspace directory or the process working directory."""
+        return self._workdir if self._workdir is not None else os.getcwd()
 
     async def expanduser(self, path: str) -> str:
         """Expand ``~`` using the host process's ``$HOME``.

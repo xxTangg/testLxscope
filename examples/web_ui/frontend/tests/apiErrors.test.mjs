@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import { toast } from 'sonner';
 
-import { ApiError, client } from '../src/api/client.ts';
+import { ApiError, client, TIMEOUT_STATUS } from '../src/api/client.ts';
 import { formatApiErrorForAlert, translateKnownError } from '../src/lib/api-error.ts';
 
 test('continuing a running SOP shows the Chinese warning and keeps the backend detail', async (t) => {
@@ -57,4 +57,40 @@ test('voice alerts use a known translation or the localized fallback', () => {
 		'语音连接已断开，请重新开始语音对话。',
 	);
 	assert.equal(formatApiErrorForAlert(new Error('Unrecognized provider error'), '语音连接失败。'), '语音连接失败。');
+});
+
+test('timed API requests work without the newer AbortSignal helpers', async (t) => {
+	const previousWindow = globalThis.window;
+	const previousStorage = globalThis.localStorage;
+	globalThis.window = { location: { origin: 'http://localhost' } };
+	globalThis.localStorage = { getItem: () => null };
+	t.after(() => {
+		globalThis.window = previousWindow;
+		globalThis.localStorage = previousStorage;
+	});
+	for (const name of ['timeout', 'any']) {
+		t.mock.method(AbortSignal, name, () => assert.fail(`AbortSignal.${name} is missing in Chromium 102`));
+	}
+	t.mock.method(globalThis, 'fetch', async (url, { signal }) => {
+		if (signal.aborted) throw signal.reason;
+		if (url.endsWith('/health')) return Response.json({ ok: true });
+		return new Response(
+			new ReadableStream({
+				start(controller) {
+					signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+				},
+			}),
+		);
+	});
+	const caller = new AbortController();
+	const options = { timeoutMs: 1_000, signal: caller.signal, silent: true };
+	assert.deepEqual(await client.get('/health', undefined, options), { ok: true });
+	const cancelled = client.get('/probe', undefined, options);
+	caller.abort();
+	await assert.rejects(cancelled, { name: 'AbortError' });
+	await assert.rejects(client.get('/probe', undefined, options), { name: 'AbortError' });
+	await assert.rejects(
+		client.blob('/workspace/files/preview-pdf', { timeoutMs: 10, silent: true }),
+		{ name: 'ApiError', status: TIMEOUT_STATUS },
+	);
 });

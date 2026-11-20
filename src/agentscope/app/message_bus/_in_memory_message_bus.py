@@ -60,12 +60,9 @@ class InMemoryMessageBus(
         # Global auto-increment counter for entry ids.
         self._seq: int = 0
 
-        # Mode A — drain queues: key -> [(entry_id, payload), ...]
-        # (entry_id, payload, expire_at | None) — expire_at is monotonic.
-        self._queues: dict[
-            str,
-            list[tuple[str, dict, float | None]],
-        ] = defaultdict(list)
+        # Mode A — drain queues, with an expiry per key like Redis Streams.
+        self._queues: dict[str, list[tuple[str, dict]]] = {}
+        self._queue_expires_at: dict[str, float] = {}
 
         # Mode C — replay logs: key -> [(entry_id, payload), ...]
         self._logs: dict[str, list[tuple[str, dict]]] = defaultdict(list)
@@ -127,6 +124,13 @@ class InMemoryMessageBus(
     # Mode A — drain queue
     # ------------------------------------------------------------------
 
+    def _drop_expired_queue(self, key: str, now: float) -> None:
+        """Remove the queue once its key expires."""
+        expires_at = self._queue_expires_at.get(key)
+        if expires_at is not None and expires_at <= now:
+            self._queues.pop(key, None)
+            self._queue_expires_at.pop(key, None)
+
     async def queue_push(
         self,
         key: str,
@@ -136,9 +140,8 @@ class InMemoryMessageBus(
     ) -> str:
         """Append ``payload`` to the in-memory drain queue at ``key``.
 
-        When ``ttl_secs`` is set the entry expires after that many
-        seconds; expired entries are dropped here and on drain, so a
-        never-drained key stays bounded.
+        A TTL refreshes the entire queue. A push without a TTL retains
+        any expiry already set on the key.
 
         Args:
             key (`str`):
@@ -146,18 +149,21 @@ class InMemoryMessageBus(
             payload (`dict`):
                 JSON-serializable dict to enqueue.
             ttl_secs (`int | None`, optional):
-                Entry lifetime in seconds; ``None`` never expires.
+                Queue lifetime in seconds; ``None`` keeps the current expiry.
 
         Returns:
             `str`:
                 The synthetic entry id assigned to this entry.
         """
         entry_id = self._next_id()
-        queue = self._queues[key]
         now = time.monotonic()
-        queue[:] = [e for e in queue if e[2] is None or e[2] > now]
-        expire_at = now + ttl_secs if ttl_secs else None
-        queue.append((entry_id, payload, expire_at))
+        self._drop_expired_queue(key, now)
+        if ttl_secs is not None and ttl_secs <= 0:
+            await self.queue_delete(key)
+            return entry_id
+        self._queues.setdefault(key, []).append((entry_id, payload))
+        if ttl_secs is not None:
+            self._queue_expires_at[key] = now + ttl_secs
         return entry_id
 
     async def queue_drain(
@@ -179,14 +185,13 @@ class InMemoryMessageBus(
             `list[tuple[str, dict]]`:
                 ``(entry_id, payload)`` pairs in arrival order.
         """
-        q = self._queues.get(key)
-        if not q:
+        self._drop_expired_queue(key, time.monotonic())
+        queue = self._queues.get(key)
+        if not queue:
             return []
-        now = time.monotonic()
-        alive = [e for e in q if e[2] is None or e[2] > now]
-        drained = alive[:max_count]
-        self._queues[key] = alive[max_count:]
-        return [(entry_id, payload) for entry_id, payload, _ in drained]
+        entries = queue[:max_count]
+        del queue[:max_count]
+        return entries
 
     async def queue_delete(self, key: str) -> None:
         """Delete the drain queue at ``key``.
@@ -196,6 +201,7 @@ class InMemoryMessageBus(
                 Queue identifier.
         """
         self._queues.pop(key, None)
+        self._queue_expires_at.pop(key, None)
 
     # ------------------------------------------------------------------
     # Mode C — replay log

@@ -254,6 +254,7 @@ function PreviewTab({ open, knowledgeBaseId, document }: TabProps) {
 	const tooLargeToInline = isTextType && document.size > MAX_INLINE_TEXT_BYTES;
 	const isText = isTextType && !tooLargeToInline;
 	const isPdf = media === 'application/pdf';
+	const canPreviewPdf = isPdf && navigator.pdfViewerEnabled === true;
 	const isImage = INLINE_IMAGE_TYPES.includes(media);
 
 	const [text, setText] = useState<string | null>(null);
@@ -270,7 +271,7 @@ function PreviewTab({ open, knowledgeBaseId, document }: TabProps) {
 			if (isText) {
 				const body = await knowledgeBaseApi.fetchDocumentText(knowledgeBaseId, document.id);
 				if (!cancelled) setText(body);
-			} else if (isPdf || isImage) {
+			} else if (canPreviewPdf || isImage) {
 				const { token } = await knowledgeBaseApi.createDocumentDownloadToken(
 					knowledgeBaseId,
 					document.id,
@@ -292,7 +293,7 @@ function PreviewTab({ open, knowledgeBaseId, document }: TabProps) {
 		return () => {
 			cancelled = true;
 		};
-	}, [open, knowledgeBaseId, document.id, isText, isPdf, isImage]);
+	}, [open, knowledgeBaseId, document.id, isText, canPreviewPdf, isImage]);
 
 	const handleDownload = useCallback(async () => {
 		try {
@@ -300,14 +301,25 @@ function PreviewTab({ open, knowledgeBaseId, document }: TabProps) {
 				knowledgeBaseId,
 				document.id,
 			);
-			window.open(
-				knowledgeBaseApi.documentContentUrl(knowledgeBaseId, document.id, token, true),
-				'_blank',
+			const link = window.document.createElement('a');
+			link.href = knowledgeBaseApi.documentContentUrl(
+				knowledgeBaseId,
+				document.id,
+				token,
+				true,
 			);
+			link.download = document.filename;
+			link.click();
 		} catch {
 			// The client already toasts the failure.
 		}
-	}, [knowledgeBaseId, document.id]);
+	}, [knowledgeBaseId, document.id, document.filename]);
+	const downloadButton = (
+		<Button size="sm" variant="outline" onClick={handleDownload}>
+			<Download className="size-3.5" />
+			{t('knowledge.documentDetail.downloadButton')}
+		</Button>
+	);
 
 	if (loading) {
 		return (
@@ -317,7 +329,12 @@ function PreviewTab({ open, knowledgeBaseId, document }: TabProps) {
 		);
 	}
 	if (error) {
-		return <p className="text-destructive text-sm">{error}</p>;
+		return (
+			<div className="space-y-3">
+				<p className="text-destructive text-sm">{error}</p>
+				{downloadButton}
+			</div>
+		);
 	}
 	if (isText && text !== null) {
 		return media === 'text/markdown' ? (
@@ -326,8 +343,17 @@ function PreviewTab({ open, knowledgeBaseId, document }: TabProps) {
 			<pre className="text-sm break-words whitespace-pre-wrap">{text}</pre>
 		);
 	}
-	if (isPdf && tokenUrl) {
-		return <iframe src={tokenUrl} title={document.filename} className="h-full w-full" />;
+	if (canPreviewPdf && tokenUrl) {
+		return (
+			<div className="flex h-full flex-col items-start gap-2">
+				{downloadButton}
+				<iframe
+					src={tokenUrl}
+					title={document.filename}
+					className="min-h-0 w-full flex-1"
+				/>
+			</div>
+		);
 	}
 	if (isImage && tokenUrl) {
 		return <img src={tokenUrl} alt={document.filename} className="max-w-full" />;
@@ -349,14 +375,13 @@ function PreviewTab({ open, knowledgeBaseId, document }: TabProps) {
 					{t(
 						tooLargeToInline
 							? 'knowledge.documentDetail.previewTooLargeDescription'
-							: 'knowledge.documentDetail.previewUnavailableDescription',
+							: isPdf
+								? 'knowledge.documentDetail.pdfPreviewUnavailableDescription'
+								: 'knowledge.documentDetail.previewUnavailableDescription',
 					)}
 				</EmptyDescription>
 			</EmptyHeader>
-			<Button size="sm" variant="outline" onClick={handleDownload}>
-				<Download className="size-3.5" />
-				{t('knowledge.documentDetail.downloadButton')}
-			</Button>
+			{downloadButton}
 		</Empty>
 	);
 }

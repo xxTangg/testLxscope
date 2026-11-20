@@ -2,7 +2,7 @@ import { format } from 'date-fns';
 import { ChevronDownIcon, CircleAlert, Loader2, PlusCircle } from 'lucide-react';
 import * as React from 'react';
 
-import { endOfDayInTimeZone } from './schedule-utils';
+import { getScheduleEndAt, getScheduleStartAt } from './schedule-utils';
 import type { ChatModelConfig, PermissionMode } from '@/api';
 import { AgentSelect } from '@/components/select/AgentSelect';
 import { LlmSelect } from '@/components/select/LlmSelect';
@@ -152,7 +152,6 @@ export function CreateScheduleDialog({ open, onOpenChange, onCreated }: Props) {
 
 			const d = new Date(form.date!);
 			const [h, m] = form.time.split(':').map(Number);
-			d.setHours(h, m, 0, 0);
 
 			if (form.freq === 'once') {
 				cronExpression = `${m} ${h} ${d.getDate()} ${d.getMonth() + 1} *`;
@@ -165,9 +164,10 @@ export function CreateScheduleDialog({ open, onOpenChange, onCreated }: Props) {
 				description: form.description.trim(),
 				cron_expression: cronExpression,
 				timezone: form.timezone,
+				started_at: getScheduleStartAt(d, form.time, form.timezone),
 				ended_at:
 					form.freq !== 'once' && form.endDate
-						? endOfDayInTimeZone(form.endDate, form.timezone)
+						? getScheduleEndAt(form.endDate, form.timezone)
 						: undefined,
 				agent_id: form.agentId,
 				chat_model_config: form.chatModelConfig!,

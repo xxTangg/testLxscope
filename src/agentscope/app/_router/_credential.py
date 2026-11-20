@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from ..access import ResourceKind
 from ..deps import (
+    get_credential_verification_secret,
     get_current_user_id,
     get_resource_access_service,
     get_storage,
@@ -19,13 +20,18 @@ from ._schema import (
 from ._schema._credential import (
     CheckCredentialModelRequest,
     CheckCredentialModelResponse,
+    NewAPIChatModelProbeRequest,
     NewAPIEmbeddingProbeRequest,
     NewAPIEmbeddingProbeResponse,
     NewAPIGatewayRequest,
     SetCredentialEnabledRequest,
 )
 from .._service import CredentialView, ResourceAccessService
-from .._service._newapi import GatewayConnectionResult, NewAPIGateway
+from .._service._newapi import (
+    GatewayConnectionResult,
+    GatewayRequestError,
+    NewAPIGateway,
+)
 from ..storage import StorageBase
 from ...credential import CredentialBase, CredentialFactory, NewAPICredential
 
@@ -84,6 +90,55 @@ async def check_newapi_connection(
     return await gateway.check_connection()
 
 
+async def _check_chat_model(
+    gateway: NewAPIGateway,
+    model: str,
+) -> CheckCredentialModelResponse:
+    try:
+        await gateway.check_chat_model(model)
+    except GatewayRequestError as exc:
+        return CheckCredentialModelResponse(
+            model=model,
+            status="failed",
+            detail=str(exc.detail),
+            code=exc.diagnostic.code,
+            http_status=exc.diagnostic.http_status,
+            diagnostic_id=exc.diagnostic.diagnostic_id,
+        )
+    except HTTPException as exc:
+        return CheckCredentialModelResponse(
+            model=model,
+            status="failed",
+            detail=str(exc.detail),
+            code="invalid_response",
+        )
+    return CheckCredentialModelResponse(model=model, status="passed")
+
+
+@credential_router.post(
+    "/newapi/check-model",
+    response_model=CheckCredentialModelResponse,
+    response_model_exclude_none=True,
+)
+async def check_newapi_model(
+    body: NewAPIChatModelProbeRequest,
+    user_id: str = Depends(get_current_user_id),
+    access: ResourceAccessService = Depends(get_resource_access_service),
+    secret: str = Depends(get_credential_verification_secret),
+) -> CheckCredentialModelResponse:
+    """Run a short completion using the draft connection and model."""
+    gateway = await _resolve_newapi_gateway(body, user_id, access)
+    result = await _check_chat_model(gateway, body.model)
+    if result.status == "passed":
+        result.verification = gateway.sign_model_verification(
+            secret,
+            user_id,
+            body.model,
+            body.credential_id,
+        )
+    return result
+
+
 @credential_router.post(
     "/newapi/embedding-dimensions",
     response_model=NewAPIEmbeddingProbeResponse,
@@ -103,6 +158,7 @@ async def probe_newapi_embedding(
 @credential_router.post(
     "/{credential_id}/check-model",
     response_model=CheckCredentialModelResponse,
+    response_model_exclude_none=True,
 )
 async def check_credential_model(
     credential_id: str,
@@ -132,15 +188,7 @@ async def check_credential_model(
         credential.base_url,
         credential.api_key.get_secret_value(),
     )
-    try:
-        await gateway.check_chat_model(body.model)
-        return CheckCredentialModelResponse(model=body.model, status="passed")
-    except HTTPException as exc:
-        return CheckCredentialModelResponse(
-            model=body.model,
-            status="failed",
-            detail=str(exc.detail),
-        )
+    return await _check_chat_model(gateway, body.model)
 
 
 @credential_router.patch(
@@ -172,6 +220,49 @@ def _validate_credential(data: dict) -> CredentialBase:
     except ValidationError as exc:
         detail = ". ".join(error["msg"] for error in exc.errors())
         raise HTTPException(status_code=422, detail=detail) from exc
+
+
+def _gateway_changed(credential: NewAPICredential, previous: dict) -> bool:
+    return (
+        credential.base_url != previous.get("base_url")
+        or credential.api_key.get_secret_value() != previous.get("api_key")
+    )
+
+
+def _require_model_verifications(
+    credential: NewAPICredential,
+    verifications: dict[str, str],
+    user_id: str,
+    secret: str,
+    *,
+    credential_id: str | None = None,
+    previous: dict | None = None,
+) -> None:
+    models = credential._model_names(credential.models)
+    if not models:
+        raise HTTPException(422, "Enter at least one chat model ID.")
+    key = credential.api_key.get_secret_value()
+    if not key:
+        raise HTTPException(422, "Enter the gateway API key.")
+    if (
+        previous is not None
+        and previous.get("type") == credential.type
+        and not _gateway_changed(credential, previous)
+        and models == credential._model_names(previous.get("models") or "")
+    ):
+        return
+    gateway = NewAPIGateway(credential.base_url, key)
+    if not all(
+        gateway.verify_model_verification(
+            secret,
+            user_id,
+            model,
+            credential_id,
+            verifications.get(model, ""),
+        )
+        for model in models
+    ):
+        raise HTTPException(409, "Test every chat model before saving.")
 
 
 @credential_router.get(
@@ -235,6 +326,7 @@ async def create_credential(
     body: CreateCredentialRequest,
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
+    secret: str = Depends(get_credential_verification_secret),
 ) -> CreateCredentialResponse:
     """Store a new credential.
 
@@ -242,16 +334,22 @@ async def create_credential(
         body (`CreateCredentialRequest`): Credential payload to store.
         user_id (`str`): Injected authenticated user ID.
         storage (`StorageBase`): Injected storage backend.
+        secret (`str`): Secret used to validate model verification tokens.
 
     Returns:
         `CreateCredentialResponse`: The server-assigned credential identifier.
     """
     data = body.data.copy()
     data.pop("id", None)
-    credential_id = await storage.upsert_credential(
-        user_id,
-        _validate_credential(data),
-    )
+    credential = _validate_credential(data)
+    if isinstance(credential, NewAPICredential):
+        _require_model_verifications(
+            credential,
+            body.model_verifications,
+            user_id,
+            secret,
+        )
+    credential_id = await storage.upsert_credential(user_id, credential)
     return CreateCredentialResponse(credential_id=credential_id)
 
 
@@ -266,6 +364,7 @@ async def update_credential(
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
     access: ResourceAccessService = Depends(get_resource_access_service),
+    secret: str = Depends(get_credential_verification_secret),
 ) -> CredentialView:
     """Replace the payload of an existing credential.
 
@@ -277,6 +376,7 @@ async def update_credential(
         access (`ResourceAccessService`): Injected access service — used
             to resolve the owning user and enforce the edit permission
             when a shared editor updates the credential.
+        secret (`str`): Secret used to validate model verification tokens.
 
     Returns:
         `CredentialView`: The updated credential record.
@@ -304,20 +404,15 @@ async def update_credential(
         data["api_key"] = _saved_newapi_key(previous.data, base_url)
     credential = _validate_credential(data)
     if isinstance(credential, NewAPICredential):
-        connection_changed = credential.base_url != previous.data.get(
-            "base_url"
-        ) or credential.api_key.get_secret_value() != previous.data.get(
-            "api_key"
+        _require_model_verifications(
+            credential,
+            body.model_verifications,
+            user_id,
+            secret,
+            credential_id=credential_id,
+            previous=previous.data,
         )
-        if connection_changed:
-            if (
-                credential._model_names(credential.models)
-                and not body.models_confirmed
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="The gateway changed. Confirm the chat models for the new connection.",
-                )
+        if _gateway_changed(credential, previous.data):
             credential.embedding_models = {}
     credential.id = credential_id
     await storage.upsert_credential(owner_id, credential)

@@ -52,6 +52,11 @@ class NewAPICredential(CredentialBase):
         description="Maximum output tokens for these models.",
     )
 
+    @field_validator("api_key")
+    @classmethod
+    def normalize_api_key(cls, value: SecretStr) -> SecretStr:
+        return SecretStr(value.get_secret_value().strip())
+
     @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, value: str) -> str:

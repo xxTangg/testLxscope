@@ -1368,6 +1368,19 @@ class ChatService:
 
                 if self._skip_parked_wakeup(session_id, agent, input_msg):
                     return
+            except asyncio.CancelledError:
+                # Setup can be cancelled before the agent has emitted a reply
+                # ID. Close the pending UI turn while still under the lock.
+                await publish_session_event(
+                    self._message_bus,
+                    session_id,
+                    ReplyEndEvent(
+                        session_id=session_id,
+                        reply_id="",
+                        finished_reason=ReplyFinishedReason.INTERRUPTED,
+                    ).model_dump(mode="json"),
+                )
+                raise
             except Exception as e:  # pylint: disable=broad-except
                 # Under the session lock, like the reply this run never got
                 # to make: these events share a channel with a live reply's,
@@ -1415,7 +1428,7 @@ class ChatService:
             elif isinstance(input_msg, list):
                 trigger_msgs = input_msg
             trigger_text = "\n".join(
-                msg.get_text_content() or "" for msg in trigger_msgs
+                msg.get_text_content() for msg in trigger_msgs
             ).strip()
             await register_inbox_consumer(self._message_bus, session_id)
             try:

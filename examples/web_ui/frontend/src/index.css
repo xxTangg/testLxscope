@@ -32,6 +32,7 @@ svg.lucide {
 }
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant no-has (@supports not selector(:has(*)));
 
 /* Keep shared theme colors in hex/rgba so older browsers can resolve them
    through CSS variables without support for modern color functions. */

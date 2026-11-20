@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Model discovery and embedding probes for New API gateways."""
+"""Model discovery and probes for New API gateways."""
 
 import asyncio
+import json
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 from ..._logging import logger
 from ...credential import NewAPICredential
 from ._access import ResourceAccessService
+from ._download_token import sign_download_token, verify_download_token
 from ._errors import UpstreamDiagnostic, log_upstream_failure
 
 if TYPE_CHECKING:
@@ -21,6 +23,9 @@ _MODEL_ENDPOINT_CAPABILITIES: dict[str, Literal["chat", "embedding"]] = {
     "openai": "chat",
     "embeddings": "embedding",
 }
+_MODEL_VERIFICATION_TTL = 15 * 60
+# Keep these tokens scoped separately from workspace and document downloads.
+_MODEL_VERIFICATION_PURPOSE = "newapi-model-verification:"
 
 
 def _gateway_failure(
@@ -135,6 +140,53 @@ class NewAPIGateway:
                 "The gateway returned no chat completion.",
                 model=model,
             )
+
+    def _model_verification_scope(
+        self,
+        model: str,
+        credential_id: str | None,
+    ) -> str:
+        # The signer covers this scope without including it in the token.
+        return json.dumps(
+            [credential_id, self._base_url, self._api_key, model],
+        )
+
+    def sign_model_verification(
+        self,
+        secret: str,
+        user_id: str,
+        model: str,
+        credential_id: str | None,
+    ) -> str:
+        """Attest a successful check for this exact gateway and model."""
+        token, _ = sign_download_token(
+            _MODEL_VERIFICATION_PURPOSE + secret,
+            user_id,
+            self._model_verification_scope(model, credential_id),
+            ttl=_MODEL_VERIFICATION_TTL,
+        )
+        return token
+
+    def verify_model_verification(
+        self,
+        secret: str,
+        user_id: str,
+        model: str,
+        credential_id: str | None,
+        token: str,
+    ) -> bool:
+        """Check the caller and configuration without another upstream call."""
+        try:
+            return (
+                verify_download_token(
+                    _MODEL_VERIFICATION_PURPOSE + secret,
+                    token,
+                    self._model_verification_scope(model, credential_id),
+                )
+                == user_id
+            )
+        except ValueError:
+            return False
 
     async def list_models(self) -> list[NewAPIModelCandidate]:
         """List accessible models and merge capabilities for duplicate IDs."""

@@ -5,6 +5,7 @@ import base64
 from typing import Any
 from fnmatch import fnmatch
 from abc import ABC
+from urllib.request import url2pathname
 
 from pydantic import Field
 
@@ -125,7 +126,7 @@ class _DashScopeFormatterBase(FormatterBase, ABC):
         elif isinstance(source, URLSource):
             url_str = str(source.url)
             if url_str.startswith("file://"):
-                local_path = url_str.removeprefix("file://")
+                local_path = url2pathname(url_str.removeprefix("file://"))
                 with open(local_path, "rb") as f:
                     encoded = base64.b64encode(f.read()).decode("utf-8")
                 url = f"data:{source.media_type};base64,{encoded}"
@@ -154,7 +155,7 @@ class _DashScopeFormatterBase(FormatterBase, ABC):
         elif isinstance(source, URLSource):
             url_str = str(source.url)
             if url_str.startswith("file://"):
-                local_path = url_str.removeprefix("file://")
+                local_path = url2pathname(url_str.removeprefix("file://"))
                 with open(local_path, "rb") as f:
                     encoded = base64.b64encode(f.read()).decode("utf-8")
                 url = f"data:{source.media_type};base64,{encoded}"
@@ -194,7 +195,7 @@ class _DashScopeFormatterBase(FormatterBase, ABC):
         if isinstance(source, URLSource):
             url_str = str(source.url)
             if url_str.startswith("file://"):
-                local_path = url_str.removeprefix("file://")
+                local_path = url2pathname(url_str.removeprefix("file://"))
                 with open(local_path, "rb") as f:
                     encoded = base64.b64encode(f.read()).decode("utf-8")
                 return {
@@ -477,12 +478,17 @@ class DashScopeMultiAgentFormatter(_DashScopeFormatterBase):
                         await self._format_tool_sequence(group),
                     )
                 case "agent_message":
-                    formatted_group = await self._format_agent_message(
+                    (
+                        formatted_group,
+                        has_history,
+                    ) = await self._format_agent_message_with_hints(
                         group,
                         is_first_agent_message,
+                        self._format_agent_message,
+                        prompt_requires_text=True,
                     )
                     formatted_msgs.extend(formatted_group)
-                    if formatted_group:
+                    if has_history:
                         is_first_agent_message = False
 
         return formatted_msgs
@@ -496,6 +502,22 @@ class DashScopeMultiAgentFormatter(_DashScopeFormatterBase):
         return await DashScopeChatFormatter(
             input_types=self.input_types,
         ).format(msgs)
+
+    async def _format_hint_message(
+        self,
+        msgs: list[Msg],
+    ) -> list[dict[str, Any]]:
+        """Format hint messages with the DashScope chat formatter.
+
+        Args:
+            msgs (`list[Msg]`):
+                One message containing a single ``HintBlock``.
+
+        Returns:
+            `list[dict[str, Any]]`:
+                The DashScope user-message representation.
+        """
+        return await self._format_tool_sequence(msgs)
 
     async def _format_agent_message(
         self,

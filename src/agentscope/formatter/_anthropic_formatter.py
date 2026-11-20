@@ -4,6 +4,7 @@ import base64
 import fnmatch
 from abc import ABC
 from typing import Any
+from urllib.request import url2pathname
 
 import requests
 from pydantic import Field
@@ -19,6 +20,7 @@ from ..message import (
     DataBlock,
     ToolCallBlock,
     ToolResultBlock,
+    ToolResultState,
     URLSource,
     Base64Source,
 )
@@ -243,13 +245,14 @@ class _AnthropicFormatterBase(FormatterBase, ABC):
                             {"type": "text", "text": "(empty tool output)"},
                         )
 
-                    content_blocks.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": tool_result_content,
-                        },
-                    )
+                    tool_result: dict[str, Any] = {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": tool_result_content,
+                    }
+                    if block.state == ToolResultState.ERROR:
+                        tool_result["is_error"] = True
+                    content_blocks.append(tool_result)
                     # Anthropic requires tool_result to be in a "user" message.
                     has_tool_result = True
 
@@ -337,7 +340,10 @@ class _AnthropicFormatterBase(FormatterBase, ABC):
         elif isinstance(source, URLSource):
             url = str(source.url)
             if url.startswith("file://"):
-                with open(url.removeprefix("file://"), "rb") as f:
+                with open(
+                    url2pathname(url.removeprefix("file://")),
+                    "rb",
+                ) as f:
                     data = base64.b64encode(f.read()).decode("utf-8")
             else:
                 response = requests.get(url, timeout=30)
@@ -436,15 +442,37 @@ class AnthropicMultiAgentFormatter(_AnthropicFormatterBase):
                         await self._format_messages(group),
                     )
                 case "agent_message":
-                    formatted_group = await self._format_agent_message(
+                    (
+                        formatted_group,
+                        has_history,
+                    ) = await self._format_agent_message_with_hints(
                         group,
                         is_first_agent_message,
+                        self._format_agent_message,
                     )
                     formatted_msgs.extend(formatted_group)
-                    if formatted_group:
+                    if has_history:
                         is_first_agent_message = False
 
         return formatted_msgs
+
+    async def _format_hint_message(
+        self,
+        msgs: list[Msg],
+    ) -> list[dict[str, Any]]:
+        """Format hint messages with the Anthropic chat formatter.
+
+        Args:
+            msgs (`list[Msg]`):
+                One message containing a single ``HintBlock``.
+
+        Returns:
+            `list[dict[str, Any]]`:
+                The Anthropic user-message representation.
+        """
+        return await AnthropicChatFormatter(
+            input_types=self.input_types,
+        ).format(msgs)
 
     async def _format_agent_message(
         self,
@@ -465,6 +493,14 @@ class AnthropicMultiAgentFormatter(_AnthropicFormatterBase):
                 elif isinstance(block, DataBlock):
                     formatted_block = self._format_anthropic_data_block(block)
                     if formatted_block:
+                        # Commit this message's pending text first, so a
+                        # media part never precedes the caption that
+                        # introduces it within the same message.
+                        if agent_text_parts:
+                            accumulated_text.append(
+                                f"{agent_name}: {' '.join(agent_text_parts)}",
+                            )
+                            agent_text_parts = []
                         if accumulated_text:
                             conversation_blocks.append(
                                 {
@@ -487,20 +523,18 @@ class AnthropicMultiAgentFormatter(_AnthropicFormatterBase):
                 },
             )
 
-        if conversation_blocks and is_first:
+        if conversation_blocks:
+            prompt = self.conversation_history_prompt if is_first else ""
             if conversation_blocks[0].get("text"):
                 conversation_blocks[0]["text"] = (
-                    self.conversation_history_prompt
-                    + "<history>\n"
-                    + conversation_blocks[0]["text"]
+                    prompt + "<history>\n" + conversation_blocks[0]["text"]
                 )
             else:
                 conversation_blocks.insert(
                     0,
                     {
                         "type": "text",
-                        "text": self.conversation_history_prompt
-                        + "<history>\n",
+                        "text": prompt + "<history>\n",
                     },
                 )
 
@@ -511,7 +545,6 @@ class AnthropicMultiAgentFormatter(_AnthropicFormatterBase):
                     {"type": "text", "text": "</history>"},
                 )
 
-        if conversation_blocks:
             return [
                 {
                     "role": "user",

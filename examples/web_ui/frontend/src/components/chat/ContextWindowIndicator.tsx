@@ -2,21 +2,53 @@ import type { ContextWindowUsage } from '@/api';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useTranslation } from '@/i18n/useI18n';
-import { cn } from '@/lib/utils';
 
-const categories = [
-	{ key: 'system_tokens', label: 'system', color: 'bg-sky-500' },
-	{ key: 'tool_tokens', label: 'tools', color: 'bg-indigo-500' },
-	{ key: 'message_tokens', label: 'messages', color: 'bg-teal-500' },
-	{ key: 'summary_tokens', label: 'summary', color: 'bg-amber-500' },
+const inputCategories = [
+	{ key: 'system_tokens', label: 'system' },
+	{ key: 'tool_tokens', label: 'tools' },
+	{ key: 'message_tokens', label: 'messages' },
+	{ key: 'summary_tokens', label: 'summary' },
 ] as const;
+
+const percentageDigits = 1;
+const percentageScale = 10 ** (percentageDigits + 2);
+
+function getUsageBreakdown(usage: ContextWindowUsage, usedUnits: number) {
+	const inputTokens = inputCategories.reduce((total, { key }) => total + usage[key], 0);
+	let cumulativeTokens = 0;
+	let previousUnits = 0;
+
+	// Round cumulative shares so the displayed details add up to the displayed total.
+	return inputCategories.map(({ key, label }) => {
+		cumulativeTokens += usage[key];
+		const cumulativeUnits =
+			inputTokens > 0 ? Math.round((usedUnits * cumulativeTokens) / inputTokens) : 0;
+		const ratio = (cumulativeUnits - previousUnits) / percentageScale;
+		previousUnits = cumulativeUnits;
+		return { label, ratio };
+	});
+}
 
 export function ContextWindowIndicator({ usage }: { usage: ContextWindowUsage | null }) {
 	const { t, i18n } = useTranslation();
-	const number = new Intl.NumberFormat(i18n.language);
-	const percent = new Intl.NumberFormat(i18n.language, { style: 'percent' });
-	const usedRatio = usage ? usage.used_tokens / usage.context_size : 0;
-	const trigger = usage ? percent.format(usage.trigger_ratio) : null;
+	const percent = new Intl.NumberFormat(i18n.language, {
+		style: 'percent',
+		maximumFractionDigits: percentageDigits,
+	});
+	const title = t('chat.contextWindow.title');
+	const triggerTokens = usage ? Math.ceil(usage.trigger_ratio * usage.context_size) : 0;
+	const fixedTokens = usage ? usage.system_tokens + usage.tool_tokens : 0;
+	const conversationBudget = Math.max(0, triggerTokens - fixedTokens);
+	const conversationTokens = usage ? usage.message_tokens + usage.summary_tokens : 0;
+	const usedRatio = conversationBudget > 0 ? conversationTokens / conversationBudget : 0;
+	const usedUnits = Math.round(usedRatio * percentageScale);
+	const displayedRatio = usedUnits / percentageScale;
+	const exhausted = usage !== null && conversationBudget === 0;
+	const status = exhausted ? t('chat.contextWindow.exhausted') : percent.format(displayedRatio);
+	const fillUnits = exhausted ? percentageScale : Math.min(usedUnits, percentageScale);
+	const fillClassName = `block h-full rounded-full ${exhausted || usedRatio >= 1 ? 'bg-amber-500' : 'bg-teal-500'}`;
+	const fillStyle = { width: `${(fillUnits * 100) / percentageScale}%` };
+	const breakdown = usage && !exhausted ? getUsageBreakdown(usage, usedUnits) : null;
 
 	return (
 		<Popover>
@@ -26,71 +58,61 @@ export function ContextWindowIndicator({ usage }: { usage: ContextWindowUsage | 
 					variant="ghost"
 					size="sm"
 					className="gap-2 text-muted-foreground"
-					aria-label={t('chat.contextWindow.title') + (usage ? ` ${percent.format(usedRatio)}` : '')}
+					aria-label={usage ? `${title} ${status}` : title}
 				>
-					<span aria-hidden className="h-1.5 w-10 overflow-hidden rounded-full bg-foreground/10">
-						<span
-							className={cn(
-								'block h-full rounded-full bg-teal-500',
-								usage && usedRatio >= usage.trigger_ratio && 'bg-amber-500',
-							)}
-							style={{ width: `${Math.min(usedRatio, 1) * 100}%` }}
-						/>
+					<span
+						aria-hidden
+						className="h-1.5 w-10 overflow-hidden rounded-full bg-foreground/10"
+					>
+						<span className={fillClassName} style={fillStyle} />
 					</span>
 					{t('chat.contextWindow.shortLabel')}
-					<span className="font-mono tabular-nums">{usage ? percent.format(usedRatio) : '—'}</span>
+					<span className="font-mono tabular-nums">{usage ? status : '—'}</span>
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent
 				side="top"
 				align="end"
 				sideOffset={8}
-				className="max-h-[var(--radix-popover-content-available-height)] w-80 max-w-[calc(100dvw_-_1.5rem)] gap-3 overflow-y-auto p-4"
-				aria-label={t('chat.contextWindow.title')}
+				className="max-h-[var(--radix-popover-content-available-height)] w-64 max-w-[calc(100dvw_-_1.5rem)] gap-3 overflow-y-auto p-4"
+				aria-label={title}
 			>
-				<h2 className="font-medium">{t('chat.contextWindow.title')}</h2>
+				<h2 className="font-medium">{title}</h2>
 				{usage ? (
 					<>
 						<p className="text-xs text-muted-foreground">
-							{t('chat.contextWindow.estimate', {
-								used: number.format(usage.used_tokens),
-								capacity: number.format(usage.context_size),
-							})}
+							{exhausted
+								? status
+								: t('chat.contextWindow.usagePercent', { percent: status })}
 						</p>
-						<div aria-hidden className="relative flex h-2 overflow-hidden rounded-full bg-foreground/10">
-							{categories.map(({ key, color }) => (
-								<span
-									key={key}
-									className={cn('h-full shrink-0', color)}
-									style={{ width: `${(usage[key] / usage.context_size) * 100}%` }}
-								/>
-							))}
-							<span
-								className="absolute inset-y-0 w-0.5 bg-foreground/70"
-								style={{ left: `${usage.trigger_ratio * 100}%` }}
-							/>
+						<div
+							aria-hidden
+							className="h-2 overflow-hidden rounded-full bg-foreground/10"
+						>
+							<span className={fillClassName} style={fillStyle} />
 						</div>
-						<dl className="space-y-2 text-xs">
-							{categories.map(({ key, label, color }) => (
-								<div key={key} className="flex items-center justify-between gap-2">
-									<dt className="flex items-center gap-2">
-										<span aria-hidden className={cn('size-2 rounded-full', color)} />
-										{t(`chat.contextWindow.${label}`)}
-									</dt>
-									<dd className="flex gap-2 font-mono tabular-nums text-muted-foreground">
-										<span>{number.format(usage[key])}</span>
-										<span className="w-8 text-right">{percent.format(usage[key] / usage.context_size)}</span>
-									</dd>
-								</div>
-							))}
-						</dl>
-						<p className="flex justify-between border-t pt-2 text-xs text-muted-foreground">
-							<span>{t('chat.contextWindow.autoCompression')}</span>
-							<span className="font-mono tabular-nums">{trigger}</span>
-						</p>
+						{breakdown && (
+							<div className="space-y-2 border-t pt-3 text-xs">
+								<h3 className="font-medium">
+									{t('chat.contextWindow.usageBreakdown')}
+								</h3>
+								<dl className="space-y-2 text-muted-foreground">
+									{breakdown.map(({ label, ratio }) => (
+										<div key={label} className="flex justify-between gap-2">
+											<dt>{t(`chat.contextWindow.${label}`)}</dt>
+											<dd className="shrink-0 font-mono tabular-nums">
+												{percent.format(ratio)}
+											</dd>
+										</div>
+									))}
+								</dl>
+							</div>
+						)}
 					</>
 				) : (
-					<p className="text-xs text-muted-foreground">{t('chat.contextWindow.unavailable')}</p>
+					<p className="text-xs text-muted-foreground">
+						{t('chat.contextWindow.unavailable')}
+					</p>
 				)}
 			</PopoverContent>
 		</Popover>

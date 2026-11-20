@@ -277,6 +277,8 @@
 		"previewFile": "Preview file",
 		"previewDescription": "Preview the generated file content.",
 		"previewUnsupported": "This format cannot be previewed in the browser. Download it to view the file.",
+		"previewAsText": "View text preview",
+		"previewTextDescription": "Showing extracted text. Download the original file to see the full layout.",
 		"previewTooLarge": "This file is large. Download it to view the content.",
 		"previewTruncated": "The preview was truncated. Download the file to see its full contents.",
 		"previewBinary": "This format could not be parsed. The preview shows the file's opening bytes.",
@@ -316,6 +318,18 @@
 		"newSession": "New Session",
 		"greeting": "Where should we start?",
 		"replyPending": "Message sent. Waiting for a response…",
+		"contextWindow": {
+			"title": "Context compaction window",
+			"shortLabel": "Compaction",
+			"usagePercent": "{{percent}} used",
+			"usageBreakdown": "Usage breakdown",
+			"system": "System prompt and skills",
+			"tools": "Tool definitions",
+			"messages": "Messages and tool results",
+			"summary": "Conversation summary",
+			"unavailable": "Complete a text exchange with the current model to see compaction window usage.",
+			"exhausted": "No room"
+		},
 		"maxItersExceeded": {
 			"title": "Reached the iteration limit",
 			"description": "Send a new message to keep going, or continue the current task.",
@@ -449,11 +463,6 @@
 		"output_size": "Output Size",
 		"models": "Model names"
 	},
-	"newApiModels": {
-		"chatPlaceholder": "Enter model IDs, separated by newlines or commas",
-		"chatOptional": "Optional. You can save this credential and choose an embedding model when creating a knowledge base.",
-		"keepKey": "Leave blank to use the saved API key"
-	},
 	"kbEmbedding": {
 		"credential": "API credential",
 		"selectCredential": "Select a saved credential",
@@ -534,6 +543,41 @@
 		"copyFailed": "Could not copy automatically. Select and copy the ID."
 	},
 	"credential": {
+		"form": {
+			"name": "Credential name",
+			"optional": "Optional",
+			"namePlaceholder": "For example, Daily use",
+			"address": "API address",
+			"keyPlaceholder": "Enter the API key issued by your gateway",
+			"keepKey": "Leave blank to use the saved API key",
+			"showKey": "Show",
+			"hideKey": "Hide",
+			"models": "Chat model names",
+			"modelHelp": "Enter at least one model ID from the gateway.",
+			"modelLabel": "Model ID {{index}}",
+			"modelPlaceholder": "Enter a model ID",
+			"modelRequired": "Enter at least one chat model ID.",
+			"addModel": "Add model",
+			"removeModel": "Remove model {{index}}",
+			"test": "Test model connectivity",
+			"retest": "Test again",
+			"testing": "Testing…",
+			"testingHint": "Waiting for the model calls to complete.",
+			"testRequired": "All models must pass before saving. Tests use a small number of tokens.",
+			"testPassed": "All model calls passed. You can save this credential.",
+			"testFailed": "Review the failed models and test again after making changes.",
+			"retestRequired": "Model checks are missing or expired. Test all models again.",
+			"retestOnChange": "Test again after changing the address, API key, or model names.",
+			"disabledKeyHint": "This credential is disabled. Enter an API key to test the models.",
+			"onePerRow": "Enter one model ID per row. Select Add model to add another.",
+			"duplicate": "Remove or change the duplicate model ID.",
+			"modelNotFound": "The gateway could not find the model or chat endpoint. Check the model ID and API address.",
+			"invalidModelResponse": "The gateway returned no valid chat result. Check that this model supports chat.",
+			"checkUnavailable": "The model check could not be completed. Try again later.",
+			"schemaUnavailable": "The credential configuration could not be loaded. Try again.",
+			"configured": "Saved",
+			"save": "Save credential"
+		},
 		"noProviders": "No providers available",
 		"selectHint": "No credential selected",
 		"selectHintDescription": "Select a credential from the sidebar to view its details.",
@@ -546,7 +590,6 @@
 		"disabled": "Disabled",
 		"enable": "Enable",
 		"disable": "Disable",
-		"connectionChanged": "The URL or API key changed. Select the chat models for this connection again, or leave the list empty.",
 		"connectionCheck": {
 			"button": "Test connection",
 			"checking": "Testing connection…",
@@ -675,6 +718,7 @@
 			"pageIndicator": "Page {{page}} of {{pageCount}}",
 			"previewUnavailableTitle": "No inline preview",
 			"previewUnavailableDescription": "This file type cannot be previewed in the browser.",
+			"pdfPreviewUnavailableDescription": "This browser cannot display PDFs inline. Switch to the Chunks tab or download the original file.",
 			"previewTooLargeTitle": "File too large to preview",
 			"previewTooLargeDescription": "This file exceeds the inline preview limit. Download it to view the original.",
 			"downloadButton": "Download original file"
@@ -804,6 +848,9 @@
 	},
 	"model-parameters": {
 		"title": "Model Parameters",
+		"booleanDefault": "Default",
+		"booleanEnabled": "On",
+		"booleanDisabled": "Off",
 		"description": "Adjust inference parameters for the selected model.",
 		"empty": "No configurable parameters.",
 		"fallbackLabel": "Fallback model",

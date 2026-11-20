@@ -133,6 +133,7 @@ def create_app(
     resource_access_policy: ResourceAccessPolicyBase | None = None,
     channels: list[Type[ChannelBase]] | None = None,
     download_secret: str | None = None,
+    credential_verification_secret: str | None = None,
     realtime_ice_servers: list[dict[str, Any]] | None = None,
     chat_attachment_max_bytes: int = 20 * 1024 * 1024,
     chat_attachment_max_chars: int = 200_000,
@@ -312,6 +313,11 @@ def create_app(
             be set explicitly behind a load balancer** — otherwise a
             token minted by one replica is rejected by the next, and
             downloads fail at random.
+        credential_verification_secret (`str | None`, optional):
+            Signs successful model checks for credential saves. A random
+            secret is generated per process by default. Deployments with
+            multiple API replicas should provide the same random secret
+            to each replica.
         realtime_ice_servers (`list[dict[str, Any]] | None`, optional):
             STUN and TURN servers exposed to browser WebRTC clients. When
             omitted, the JSON array in
@@ -363,6 +369,9 @@ def create_app(
     app.state.mcp_hubs = _index_hubs(mcp_hubs, "MCP")
     app.state.skill_hubs = _index_hubs(skill_hubs, "skill")
     app.state.download_secret = download_secret or secrets.token_urlsafe(32)
+    app.state.credential_verification_secret = (
+        credential_verification_secret or secrets.token_urlsafe(32)
+    )
     if chat_attachment_max_bytes <= 0:
         raise ValueError("chat_attachment_max_bytes must be greater than 0.")
     if chat_attachment_max_chars <= 0:

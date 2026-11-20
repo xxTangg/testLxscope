@@ -524,6 +524,26 @@ class TestWakeupDispatcherDispatch(IsolatedAsyncioTestCase):
 class TestWakeupDispatcherLifecycle(IsolatedAsyncioTestCase):
     """Tests covering the ``__aenter__`` / ``__aexit__`` ACM behaviour."""
 
+    async def test_subscription_error_fails_startup(self) -> None:
+        bus = _FakeBus()
+        dispatcher = WakeupDispatcher(
+            message_bus=bus,
+            storage=_FakeStorage(),
+            chat_service=_FakeChatService(),
+            chat_run_registry=ChatRunRegistry(),
+        )
+
+        async def failed_subscription(*_args, **_kwargs):
+            if False:
+                yield {}
+            raise RuntimeError("subscription failed")
+
+        bus.subscribe = failed_subscription
+        with self.assertRaisesRegex(RuntimeError, "subscription failed"):
+            await asyncio.wait_for(dispatcher.__aenter__(), 1)
+        self.assertIsNone(dispatcher._task)
+        self.assertFalse(dispatcher._retry_tasks)
+
     async def test_exit_cancels_loop_cleanly(self) -> None:
         """``__aexit__`` cancels the dispatcher's loop task and returns
         without re-raising the cancellation."""

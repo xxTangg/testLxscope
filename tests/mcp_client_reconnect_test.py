@@ -4,9 +4,10 @@ import asyncio
 from types import TracebackType
 from typing import Any
 from unittest.async_case import IsolatedAsyncioTestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import anyio
+from mcp import types
 
 from agentscope.mcp import HttpMCPConfig, MCPClient, StdioMCPConfig
 
@@ -37,7 +38,12 @@ class _OneShotTransport:
 class _FakeSession:
     """Small ClientSession stand-in for lifecycle-only tests."""
 
-    def __init__(self, read_stream: object, write_stream: object) -> None:
+    def __init__(
+        self,
+        read_stream: object,
+        write_stream: object,
+        **_kwargs: Any,
+    ) -> None:
         self.read_stream = read_stream
         self.write_stream = write_stream
         self.exit_count = 0
@@ -158,8 +164,9 @@ class MCPClientReconnectTest(IsolatedAsyncioTestCase):
                 self,
                 read_stream: object,
                 write_stream: object,
+                **kwargs: Any,
             ) -> None:
-                super().__init__(read_stream, write_stream)
+                super().__init__(read_stream, write_stream, **kwargs)
                 _BlockingSession.instance = self
 
             async def initialize(self) -> None:
@@ -183,6 +190,8 @@ class MCPClientReconnectTest(IsolatedAsyncioTestCase):
 
             task = asyncio.create_task(client.connect())
             await initialize_started.wait()
+            with self.assertRaisesRegex(RuntimeError, "already in progress"):
+                await client.connect()
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
@@ -256,6 +265,45 @@ class MCPClientReconnectTest(IsolatedAsyncioTestCase):
         await asyncio.wait_for(transport_closed.wait(), 1)
         self.assertEqual(transport.exit_count, 1)
         self.assertFalse(client.is_connected)
+
+    async def test_notification_during_discovery_refreshes_catalog(self) -> None:
+        old = types.Tool(name="old", inputSchema={"type": "object"})
+        new = types.Tool(name="new", inputSchema={"type": "object"})
+        notification = types.ServerNotification(
+            types.ToolListChangedNotification(),
+        )
+
+        async def list_tools():
+            if session.list_tools.await_count == 1:
+                await session.handle_message(notification)
+                return types.ListToolsResult(tools=[old])
+            return types.ListToolsResult(tools=[new])
+
+        session = _FakeSession(object(), object())
+        session.list_tools = AsyncMock(side_effect=list_tools)
+
+        def create_session(_read, _write, *, message_handler):
+            session.handle_message = message_handler
+            return session
+
+        with patch(
+            "agentscope.mcp._mcp_client.stdio_client",
+            return_value=_OneShotTransport(),
+        ), patch(
+            "agentscope.mcp._mcp_client.ClientSession",
+            side_effect=create_session,
+        ):
+            client = MCPClient(
+                name="notifications",
+                is_stateful=True,
+                mcp_config=StdioMCPConfig(command="unused"),
+            )
+            await client.connect()
+            try:
+                self.assertEqual(await client.list_raw_tools(), [new])
+                self.assertEqual(session.list_tools.await_count, 2)
+            finally:
+                await client.close()
 
     async def test_http_client_can_reconnect_after_close(self) -> None:
         """An HTTP client must get a new transport after close()."""

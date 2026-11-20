@@ -477,6 +477,7 @@ export interface CredentialView extends RecordBase {
 
 export interface CreateCredentialRequest {
 	data: Record<string, unknown>;
+	model_verifications?: Record<string, string>;
 }
 
 export interface CreateCredentialResponse {
@@ -485,7 +486,7 @@ export interface CreateCredentialResponse {
 
 export interface UpdateCredentialRequest {
 	data: Record<string, unknown>;
-	models_confirmed?: boolean;
+	model_verifications?: Record<string, string>;
 }
 
 export interface CredentialListResponse {
@@ -811,6 +812,7 @@ export interface CreateScheduleRequest {
 	description?: string;
 	cron_expression: string;
 	timezone?: string;
+	started_at?: string | null;
 	ended_at?: string | null;
 	agent_id: string;
 	chat_model_config: ChatModelConfig;

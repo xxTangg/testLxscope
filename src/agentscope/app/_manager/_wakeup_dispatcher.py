@@ -122,33 +122,45 @@ class WakeupDispatcher:
             `Self`: This dispatcher instance.
         """
         ready = asyncio.Event()
-        self._task = asyncio.create_task(
+        loop_task = asyncio.create_task(
             self._loop(ready),
             name="wakeup-dispatcher",
         )
-        await ready.wait()
-        await self._drain_and_dispatch()
+        self._task = loop_task
+        ready_waiter = asyncio.create_task(ready.wait())
+        try:
+            await asyncio.wait(
+                {loop_task, ready_waiter},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if loop_task.done():
+                await loop_task
+                raise RuntimeError("Wakeup subscription ended during startup.")
+            await self._drain_and_dispatch()
+            if loop_task.done():
+                await loop_task
+                raise RuntimeError("Wakeup subscription ended during startup.")
+        except BaseException:
+            await self._stop()
+            raise
+        finally:
+            ready_waiter.cancel()
+            await asyncio.gather(ready_waiter, return_exceptions=True)
         return self
 
     async def __aexit__(self, *exc: object) -> None:
         """Cancel the dispatcher loop and any pending retries."""
-        retries = list(self._retry_tasks)
-        for retry in retries:
-            retry.cancel()
-        for retry in retries:
-            try:
-                await retry
-            except asyncio.CancelledError:
-                pass
-        self._retry_tasks.clear()
-        if self._task is None:
-            return
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:
-            pass
+        await self._stop()
+
+    async def _stop(self) -> None:
+        """Stop tasks started by the dispatcher."""
+        tasks = [self._task] if self._task is not None else []
+        tasks.extend(self._retry_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._task = None
+        self._retry_tasks.clear()
 
     # ------------------------------------------------------------------
     # Internals
@@ -171,6 +183,8 @@ class WakeupDispatcher:
             ):
                 await self._drain_and_dispatch()
         except Exception:  # pylint: disable=broad-except
+            if not ready.is_set():
+                raise
             logger.exception(
                 "WakeupDispatcher loop crashed; subscription ended.",
             )

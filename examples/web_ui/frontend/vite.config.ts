@@ -9,6 +9,10 @@ const agentscopeApiTarget = process.env.AGENTSCOPE_API_TARGET ?? 'http://127.0.0
 
 export default defineConfig({
 	plugins: [react(), tailwindcss(), svgr()],
+	build: {
+		// Deployments also run on Chromium 102 (Qaxbrowser).
+		target: ['chrome102', 'edge102', 'firefox114', 'safari16.4', 'ios16.4'],
+	},
 	server: {
 		proxy: {
 			'/api': {

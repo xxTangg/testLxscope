@@ -67,7 +67,7 @@ class TestDockerWorkspaceManager(IsolatedAsyncioTestCase):
                 "workspace_id": "fixed-id",
                 "host_workdir": os.path.join(self.basedir, "fixed-id"),
                 "base_image": "python:3.11-slim",
-                "node_version": "20",
+                "node_version": "22.23.4",
                 "extra_pip": [],
                 "gateway_port": 5600,
                 "env": {},
@@ -85,6 +85,25 @@ class TestDockerWorkspaceManager(IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 manager._workdir_for(workspace_id)
 
+    async def test_filesystem_root_basedir_still_contains_workdirs(
+        self,
+    ) -> None:
+        """A basedir at a filesystem root contains every ordinary id.
+
+        Appending a separator to a root yields ``"//"`` on POSIX and
+        ``"C:\\\\"`` on Windows, so the old prefix test matched nothing
+        and rejected every id with a message claiming it escaped the
+        base directory.
+        """
+        root = os.path.realpath(os.sep)
+        manager = DockerWorkspaceManager(root)
+
+        for workspace_id in ("ws-normal", "abc123"):
+            self.assertEqual(
+                manager._workdir_for(workspace_id),
+                os.path.join(root, workspace_id),
+            )
+
     async def test_legacy_workdir_is_kept_mounted(self) -> None:
         """A pre-existing <basedir>/<user>/<agent> keeps being used."""
         legacy = os.path.join(self.basedir, "u1", "a1")
@@ -99,7 +118,7 @@ class TestDockerWorkspaceManager(IsolatedAsyncioTestCase):
                 "workspace_id": "fixed-id",
                 "host_workdir": legacy,
                 "base_image": "python:3.11-slim",
-                "node_version": "20",
+                "node_version": "22.23.4",
                 "extra_pip": [],
                 "gateway_port": 5600,
                 "env": {},
