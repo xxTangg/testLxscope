@@ -32,6 +32,7 @@ import type { ReplyPhase } from '@/hooks/useMessages';
 import { useTranslation } from '@/i18n/useI18n';
 import type { RealtimeConnectionState } from '@/lib/browserWebRTCTransport';
 import { cn } from '@/lib/utils';
+import { parseSessionTime, SESSION_TIME_ZONE } from '@/utils/sessionTime';
 import { createUuid } from '@/utils/uuid';
 
 /** How long a load may run before it is worth showing a spinner. */
@@ -43,6 +44,7 @@ const SPINNER_DELAY_MS = 150;
  * merely paused to read the last reply.
  */
 const TIME_MARKER_GAP_MS = 10 * 60 * 1000;
+const markerDayFormatter = new Intl.DateTimeFormat('en', { timeZone: SESSION_TIME_ZONE });
 
 /**
  * Stamp for a resumed conversation. The time alone is enough while the
@@ -52,9 +54,10 @@ const TIME_MARKER_GAP_MS = 10 * 60 * 1000;
  * rather than out of a hand-written pattern per locale.
  */
 function markerStamp(at: Date, previous: Date, language: string): string {
-	const sameDay = at.toDateString() === previous.toDateString();
+	const sameDay = markerDayFormatter.format(at) === markerDayFormatter.format(previous);
 	return new Intl.DateTimeFormat(language, {
 		...(sameDay ? {} : { month: 'short', day: 'numeric' }),
+		timeZone: SESSION_TIME_ZONE,
 		hour: '2-digit',
 		minute: '2-digit',
 		hour12: false,
@@ -98,6 +101,8 @@ interface ChatContentProps {
 	 * looking, rather than scrolled off the top.
 	 */
 	footerSlot?: React.ReactNode;
+	/** Text-chat status controls displayed below the composer. */
+	composerStatus?: React.ReactNode;
 	/** @see TextInputProps.allowedInputTypes */
 	allowedInputTypes: string[];
 	/** @see TextInputProps.fileProcessor */
@@ -130,6 +135,7 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 	onVoiceToggle,
 	voiceDisabled,
 	footerSlot,
+	composerStatus,
 	allowedInputTypes,
 	fileProcessor,
 	agentId,
@@ -246,9 +252,9 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 							<MessageScrollerContent>
 								{msgs.map((message, index) => {
 									const previous = msgs[index - 1];
-									const at = new Date(message.created_at);
+									const at = parseSessionTime(message.created_at);
 									const previousAt = previous
-										? new Date(previous.finished_at ?? previous.created_at)
+										? parseSessionTime(previous.finished_at ?? previous.created_at)
 										: at;
 									return (
 										<MessageScrollerItem
@@ -425,6 +431,9 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 							</div>
 						}
 					/>
+					{composerStatus && (
+						<div className="mt-1 flex justify-end px-1">{composerStatus}</div>
+					)}
 				</div>
 			)}
 		</div>

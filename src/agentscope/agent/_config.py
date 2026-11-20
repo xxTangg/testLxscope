@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """The agent config classes."""
 
+import os
+
 from pydantic import BaseModel, Field, field_validator
 
 from ..model import ChatModelBase
@@ -208,10 +210,10 @@ class InjectionConfig(BaseModel):
 
     timezone: str = Field(
         title="Timezone",
-        default="UTC",
+        default_factory=lambda: os.getenv("TZ") or "UTC",
         description=(
-            "The injected timezone. e.g. 'America/New_York' or "
-            "'Asia/Shanghai'."
+            "The injected IANA timezone, e.g. 'Asia/Shanghai'. Defaults to "
+            "the TZ environment variable, or UTC if unset."
         ),
     )
     """The timezone to inject into the context, follow the standard timezone

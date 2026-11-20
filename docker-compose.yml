@@ -80,8 +80,7 @@ services:
       NO_PROXY: "*"
       no_proxy: "*"
       REDIS_HOST: redis
-      # Persist UTC instants; the session UI displays Asia/Shanghai (UTC+08:00).
-      TZ: Etc/UTC
+      TZ: Asia/Shanghai
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       AGENTSCOPE_PORT: 8000

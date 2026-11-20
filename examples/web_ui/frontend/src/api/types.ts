@@ -13,6 +13,19 @@ export interface ChatModelConfig {
 	parameters: Record<string, unknown>;
 }
 
+/** Estimated next model input, saved with the last measured text reply. */
+export type ContextWindowUsage = {
+	model: string;
+	credential_id: string;
+	context_size: number;
+	used_tokens: number;
+	trigger_ratio: number;
+	system_tokens: number;
+	summary_tokens: number;
+	message_tokens: number;
+	tool_tokens: number;
+};
+
 export interface TTSModelConfig {
 	type: string;
 	credential_id: string;

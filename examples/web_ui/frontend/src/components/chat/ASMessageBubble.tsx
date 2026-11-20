@@ -1103,7 +1103,7 @@ function ThinkingBlockView({ block }: { block: ThinkingBlock }) {
 					)}
 				>
 					<span>
-						{elapsedText && elapsedText !== '0s'
+						{elapsedText && (!isRunning || elapsedText !== '0s')
 							? t('messageBubble.thinkingFor', { duration: elapsedText })
 							: t('messageBubble.thinking')}
 					</span>

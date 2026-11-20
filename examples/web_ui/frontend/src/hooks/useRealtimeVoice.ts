@@ -2,7 +2,18 @@ import type { UserConfirmResultEvent } from '@agentscope-ai/agentscope/event';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { ApiError } from '@/api/client';
+import i18n from '@/i18n';
+import { formatApiErrorForAlert } from '@/lib/api-error';
 import { BrowserWebRTCTransport, type RealtimeConnectionState } from '@/lib/browserWebRTCTransport';
+
+function describeVoiceError(error: unknown): string {
+	if (error instanceof ApiError) return error.message;
+	if (error instanceof DOMException && error.name === 'NotAllowedError') {
+		return i18n.t('realtime.microphoneDenied');
+	}
+	return formatApiErrorForAlert(error, i18n.t('realtime.connectionError'));
+}
 
 export function useRealtimeVoice(agentId: string | null, sessionId: string | null) {
 	const [state, setState] = useState<RealtimeConnectionState>('idle');
@@ -38,7 +49,7 @@ export function useRealtimeVoice(agentId: string | null, sessionId: string | nul
 				if (transportRef.current !== transport) return;
 				transportRef.current = null;
 				setState('error');
-				toast.error(error.message);
+				toast.error(describeVoiceError(error));
 			},
 		});
 		transportRef.current = transport;
@@ -49,7 +60,7 @@ export function useRealtimeVoice(agentId: string | null, sessionId: string | nul
 			if (transportRef.current === transport) {
 				transportRef.current = null;
 				setState('error');
-				toast.error(error instanceof Error ? error.message : 'Voice mode failed to start.');
+				toast.error(describeVoiceError(error));
 			}
 		}
 	}, [agentId, sessionId]);

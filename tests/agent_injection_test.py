@@ -2,7 +2,8 @@
 """Unit tests for the runtime state injection of the agent, i.e. the
 ``Agent._inject_runtime_state`` method."""
 # pylint: disable=too-many-public-methods
-from datetime import datetime, tzinfo
+import os
+from datetime import datetime, timezone, tzinfo
 from unittest.async_case import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
@@ -38,9 +39,9 @@ class _FrozenDatetime(datetime):
         cls,
         tz: tzinfo | None = None,
     ) -> datetime:
-        """Return the frozen instant (optionally attached with ``tz``)."""
+        """Return the frozen UTC instant in the requested timezone."""
         if tz is not None:
-            return FROZEN_NOW.replace(tzinfo=tz)
+            return FROZEN_NOW.replace(tzinfo=timezone.utc).astimezone(tz)
         return FROZEN_NOW
 
 
@@ -49,6 +50,7 @@ class AgentInjectionTest(IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self) -> None:
         """Create a fresh agent with a mock model for each test."""
+        self.enterContext(patch.dict(os.environ, {"TZ": "UTC"}))
         self.model = MockModel(context_size=1000)
         self.agent = Agent(
             name="Friday",
@@ -247,21 +249,25 @@ class AgentInjectionTest(IsolatedAsyncioTestCase):
         events = await self._run_injection()
         self.assertEqual([], events)
 
-    async def test_recorded_timezone_is_honored(self) -> None:
-        """The recorded timezone should be used to restore the recorded time,
-        so a changed ``timezone`` config doesn't distort the elapsed time."""
+    async def test_timezone_change_refreshes_recent_time_injection(self) -> None:
+        """An existing chat gets the deployed timezone on its next turn."""
         self.agent.state.cur_iter = 1
+        self._add_injection("2026-07-01T11:50:00")
+        with patch.dict(os.environ, {"TZ": "Asia/Shanghai"}):
+            self.agent.injection_config = InjectionConfig()
 
-        # The frozen now is 12:00 UTC, i.e. 20:00 in Shanghai. An injection
-        # recorded 10 minutes ago in Shanghai -> within the interval, skip.
-        self._add_injection("2026-07-01T19:50:00", timezone="Asia/Shanghai")
         events = await self._run_injection()
-        self.assertEqual([], events)
+        self.assertEqual(1, len(events))
+        self.assertIn(
+            "<current-time>2026-07-01T20:00:00</current-time>",
+            events[0].hint,
+        )
+        self.assertIn("<timezone>Asia/Shanghai</timezone>", events[0].hint)
+        self.assertEqual([], await self._run_injection())
 
-        # The same wall-clock time read as UTC would be 7h50m in the future,
-        # so a negative elapsed time must trigger an injection instead of
-        # being silently swallowed.
-        self.agent.state.context = []
+    async def test_future_time_injection_is_refreshed(self) -> None:
+        """A clock adjustment can leave an existing reminder in the future."""
+        self.agent.state.cur_iter = 1
         self._add_injection("2026-07-01T19:50:00")
         events = await self._run_injection()
         self.assertEqual(1, len(events))

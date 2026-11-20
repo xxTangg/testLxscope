@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useTranslation } from '@/i18n/useI18n';
+import { translateKnownError } from '@/lib/api-error';
 import { cn } from '@/lib/utils';
 
 export function SOPRuns({
@@ -337,7 +338,7 @@ function RunDetail({
 											role="alert"
 											className="rounded-lg bg-destructive-alpha-5 p-3 text-xs leading-relaxed text-destructive"
 										>
-											{state.error}
+										{translateKnownError(state.error) ?? state.error}
 										</p>
 									)}
 									{state?.submission && (
@@ -528,7 +529,7 @@ function RunDetail({
 													</p>
 													{attempt.error && (
 														<p className="text-destructive">
-															{attempt.error}
+													{translateKnownError(attempt.error) ?? attempt.error}
 														</p>
 													)}
 													{Object.keys(attempt.outputs).length > 0 && (

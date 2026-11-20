@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 
 import { hubApi, mcpApi } from '@/api';
 import type { JSONSchema, MCPCard, MCPView } from '@/api';
-import { ApiError } from '@/api/client';
 import { SchemaForm, defaultValuesFromSchema } from '@/components/form/SchemaForm.tsx';
 import type { SchemaFormValue } from '@/components/form/SchemaForm.tsx';
 import { Alert, AlertDescription } from '@/components/ui/alert.tsx';
@@ -20,6 +19,7 @@ import { Field, FieldGroup, FieldLabel } from '@/components/ui/field.tsx';
 import { Input } from '@/components/ui/input.tsx';
 import { Spinner } from '@/components/ui/spinner.tsx';
 import { useTranslation } from '@/i18n/useI18n';
+import { formatApiErrorForAlert } from '@/lib/api-error';
 
 interface Props {
 	/** The card to install, or `null` to keep the dialog closed. */
@@ -87,7 +87,7 @@ export function InstallMCPDialog({ card, editing, onOpenChange, onInstalled }: P
 			onInstalled();
 			onOpenChange(false);
 		} catch (e) {
-			setError(e instanceof ApiError ? e.detail : (e as Error).message);
+			setError(formatApiErrorForAlert(e));
 		} finally {
 			setInstalling(false);
 		}

@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 
 import type {
 	ChatModelConfig,
+	ContextWindowUsage,
 	PermissionMode,
 	RealtimeModelConfig,
 	SessionKnowledgeConfig,
@@ -24,6 +25,7 @@ import type {
 import { chatApi, sessionApi } from '@/api';
 import MCPSvg from '@/assets/images/mcp.svg?react';
 import { ChatContent } from '@/components/chat/ChatContent.tsx';
+import { ContextWindowIndicator } from '@/components/chat/ContextWindowIndicator';
 import { SubagentHitlCard } from '@/components/chat/SubagentHitlCard';
 import { CreateCredentialDialog } from '@/components/dialog/CreateCredentialDialog';
 import { KnowledgeBasePanel } from '@/components/panel/KnowledgeBasePanel';
@@ -311,6 +313,16 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 		isRealtimeAudioActive: () => voiceBusy,
 		sendRealtimeUserConfirm: realtimeVoice.userConfirm,
 	});
+	const lastContextUsage = msgs.findLast(
+		(message) => message.role === 'assistant' && message.metadata?.context_usage,
+	)?.metadata?.context_usage as ContextWindowUsage | undefined;
+	const contextUsage =
+		lastContextUsage &&
+		lastContextUsage.context_size > 0 &&
+		lastContextUsage.model === selectedModel?.model &&
+		lastContextUsage.credential_id === selectedModel.credential_id
+			? lastContextUsage
+			: null;
 	const {
 		mcps,
 		loading: mcpsLoading,
@@ -1037,6 +1049,9 @@ export function ChatViewport({ agentId, sessionId, onSessionsChanged }: ChatView
 									voiceState={realtimeVoice.state}
 									onVoiceToggle={() => void realtimeVoice.toggle()}
 									voiceDisabled={!selectedRealtimeModel || !agentId || !sessionId}
+									composerStatus={sessionId && (
+										<ContextWindowIndicator key={sessionId} usage={contextUsage} />
+									)}
 									// cwd={
 									// 	{cwd: view?.session.config.cwd, git: {
 									// 		branch: 'main',

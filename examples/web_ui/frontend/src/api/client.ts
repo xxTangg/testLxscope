@@ -1,5 +1,7 @@
 import { toast } from 'sonner';
 
+import { formatApiErrorMessage } from '../lib/api-error.ts';
+
 const API_BASE_PATH = '/api/';
 
 // Older versions saved a direct backend URL (usually :8001). Drop it once so
@@ -19,14 +21,14 @@ export const AUTH_UNAUTHORIZED_EVENT = 'agentscope:auth-unauthorized';
 
 /**
  * Structured error thrown for non-2xx HTTP responses.
- * `message` contains the human-readable detail extracted from the backend.
+ * `message` is localized for display. `detail` contains the original response.
  */
 export class ApiError extends Error {
 	readonly status: number;
 	readonly detail: string;
 
 	constructor(status: number, detail: string) {
-		super(detail);
+		super(formatApiErrorMessage(status, detail));
 		this.name = 'ApiError';
 		this.status = status;
 		this.detail = detail;
@@ -114,7 +116,7 @@ async function streamRequest(path: string, options: RequestOptions = {}): Promis
 					0,
 					'Cannot reach the server. Check the server address and your network.',
 				);
-		if (!silent) toast.error(error.detail);
+		if (!silent) toast.error(error.message);
 		throw error;
 	}
 
@@ -124,7 +126,7 @@ async function streamRequest(path: string, options: RequestOptions = {}): Promis
 		if (res.status === 401 && authenticated && getAccessToken()) {
 			window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
 		}
-		if (!silent) toast.error(detail);
+		if (!silent) toast.error(error.message);
 		throw error;
 	}
 

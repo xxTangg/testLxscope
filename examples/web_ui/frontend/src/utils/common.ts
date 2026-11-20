@@ -1,3 +1,4 @@
+import { parseSessionTime } from './sessionTime.ts';
 import type { CredentialView } from '@/api';
 
 /** Display label for a credential: its user-facing name, or a short id prefix. */
@@ -150,19 +151,10 @@ export function formatElapsedTime(
 	finishedAt: string | null | undefined,
 	now: number,
 ): string | null {
-	const offset = /(?:Z|[+-]\d{2}:\d{2})$/i;
-	const startOffset = createdAt.match(offset)?.[0];
-	const endOffset = finishedAt?.match(offset)?.[0];
-	// Older completed replies store wall times. Use a shared offset so their
-	// duration is independent of the browser timezone, including after a resume.
-	const fallbackOffset = endOffset ?? startOffset ?? 'Z';
-	const startMs = Date.parse(createdAt + (startOffset || !finishedAt ? '' : fallbackOffset));
-	const endMs = finishedAt
-		? Date.parse(finishedAt + (endOffset ? '' : fallbackOffset))
-		: now;
+	const startMs = parseSessionTime(createdAt).getTime();
+	const endMs = finishedAt ? parseSessionTime(finishedAt).getTime() : now;
 	const elapsedMs = Math.max(0, endMs - startMs);
 	if (!Number.isFinite(elapsedMs)) return null;
-	if (elapsedMs > 0 && elapsedMs < 1000) return `${elapsedMs}ms`;
 	return formatTime(elapsedMs / 1000);
 }
 

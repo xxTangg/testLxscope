@@ -383,6 +383,33 @@ class Agent:
         context."""
         await self._handle_incoming_messages(msgs)
 
+    async def get_context_usage(self) -> dict[str, int | float]:
+        """Estimate the next model input using the compression token counter."""
+        model_input = await self._prepare_model_input()
+        messages = model_input["messages"]
+        total = await self.model.count_tokens(**model_input)
+        without_tools = min(
+            total,
+            await self.model.count_tokens(messages, None),
+        )
+        system = min(
+            without_tools,
+            await self.model.count_tokens(messages[:1], None),
+        )
+        with_summary = system
+        if self.state.summary:
+            with_summary = await self.model.count_tokens(messages[:2], None)
+        with_summary = max(system, min(with_summary, without_tools))
+        return {
+            "used_tokens": total,
+            "context_size": self.model.context_size,
+            "trigger_ratio": self.context_config.trigger_ratio,
+            "system_tokens": system,
+            "summary_tokens": with_summary - system,
+            "message_tokens": without_tools - with_summary,
+            "tool_tokens": total - without_tools,
+        }
+
     async def compress_context(
         self,
         context_config: ContextConfig | None = None,
@@ -1422,13 +1449,10 @@ class Agent:
 
         The injection timing is decided per dimension:
 
-        - **Time**: injected when (1) no time is recorded in the context (i.e.
-          the first reply or right after a context compression), or (2) the
-          elapsed time since the recorded one exceeds
-          ``injection_config.time_interval`` hours. The injected time is the
-          wall-clock time of ``injection_config.timezone``, and the timezone
-          is injected next to it so that the elapsed time is still correct
-          when the configured timezone changes within a conversation.
+        - **Time**: injected when no time is recorded in the context, the
+          timezone has changed, or the recorded time is older than
+          ``injection_config.time_interval`` hours. The reminder carries the
+          wall-clock time and the configured timezone.
         - **Plan tasks**: injected when there are pending or in-progress tasks
           while the context contains neither task-related tool calls (e.g.
           they have been compressed away) nor a previous tasks injection.
@@ -1460,7 +1484,8 @@ class Agent:
         # The wall-clock time in the configured timezone. It's kept timezone
         # aware for the elapsed time calculation, while ``time_format`` decides
         # whether the timezone is carried in the injected text.
-        now = datetime.now(_resolve_timezone(self.injection_config.timezone))
+        timezone = self.injection_config.timezone
+        now = datetime.now(_resolve_timezone(timezone))
 
         # A fixed source used to detect existing injection
         injection_source = self.injection_config.injection_source
@@ -1535,8 +1560,11 @@ class Agent:
                 r"<current-time>(.*?)</current-time>",
                 last_time_text,
             )
+            match_tz = re.search(r"<timezone>(.*?)</timezone>", last_time_text)
             last_time = None
-            if match is not None:
+            if match is not None and (
+                match_tz is None or match_tz.group(1).strip() == timezone
+            ):
                 try:
                     last_time = datetime.strptime(
                         match.group(1).strip(),
@@ -1549,22 +1577,7 @@ class Agent:
 
             if last_time is not None:
                 if last_time.tzinfo is None:
-                    # The recorded time is the wall-clock time of the timezone
-                    # recorded next to it, e.g.
-                    # <timezone>Asia/Shanghai</timezone>. Restore it so that
-                    # the comparison holds even if the configured timezone has
-                    # changed since then.
-                    match_tz = re.search(
-                        r"<timezone>(.*?)</timezone>",
-                        last_time_text,
-                    )
-                    last_time = last_time.replace(
-                        tzinfo=_resolve_timezone(
-                            match_tz.group(1).strip()
-                            if match_tz
-                            else self.injection_config.timezone,
-                        ),
-                    )
+                    last_time = last_time.replace(tzinfo=now.tzinfo)
 
                 elapsed_hours = (now - last_time).total_seconds() / 3600
                 # A negative elapsed time means the recorded time is in the
@@ -1578,7 +1591,7 @@ class Agent:
             injections["current-time"] = now.strftime(
                 self.injection_config.time_format,
             )
-            injections["timezone"] = self.injection_config.timezone
+            injections["timezone"] = timezone
 
         # =====================================================================
         # Step 3: Check Plan Tasks

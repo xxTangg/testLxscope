@@ -15,6 +15,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 
 import { sessionApi, takeFreshlyCreated } from '@/api';
 import { chatApi } from '@/api';
+import type { ContextWindowUsage } from '@/api';
 import { useAudioManager } from '@/context/AudioContext';
 import { createUuid } from '@/utils/uuid';
 
@@ -206,9 +207,13 @@ export function useMessages(
 					// The member resolved (or its run ended); clear the card.
 					const v = custom.value as { worker_session_id: string; reply_id: string };
 					setSubagentHitl((prev) => prev.filter((x) => hitlKey(x) !== hitlKey(v)));
-				} else if (custom.name === 'generated_files') {
+				} else if (
+					(custom.name === 'generated_files' || custom.name === 'context_usage') &&
+					custom.value
+				) {
 					const v = custom.value as {
 						reply_id?: string;
+						usage?: ContextWindowUsage;
 						files?: Array<{
 							path: string;
 							reported_path?: string;
@@ -217,12 +222,16 @@ export function useMessages(
 							size_bytes: number | null;
 						}>;
 					};
-					if (v.reply_id && Array.isArray(v.files)) {
+					const metadata: Msg['metadata'] | false =
+						custom.name === 'generated_files'
+							? Array.isArray(v.files) && { generated_files: v.files }
+							: !!v.usage && { context_usage: v.usage };
+					if (v.reply_id && metadata) {
 						const reply = msgsRef.current.find((message) => message.id === v.reply_id);
 						if (reply) {
 							const updated = {
 								...reply,
-								metadata: { ...reply.metadata, generated_files: v.files },
+								metadata: { ...reply.metadata, ...metadata },
 							};
 							msgsRef.current = msgsRef.current.map((message) =>
 								message.id === v.reply_id ? updated : message,

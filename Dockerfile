@@ -2,7 +2,7 @@ FROM node:20-bookworm-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TZ=Etc/UTC \
+    TZ=Asia/Shanghai \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app/src \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
@@ -13,17 +13,20 @@ WORKDIR /app
 # Keep Node.js 20 in the image because current Playwright MCP releases
 # require a modern Node runtime.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         python3 \
         python3-pip \
         python3-venv \
         build-essential \
         ripgrep \
         ca-certificates \
+        tzdata \
         fonts-noto-cjk \
         libreoffice-calc \
         libreoffice-impress \
         libreoffice-writer \
+    && ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime \
+    && printf '%s\n' "$TZ" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 # Bake the MCP server and a headless Chromium into the image. This avoids an

@@ -1592,6 +1592,33 @@ class ChatService:
                             if artifact_cursor is not None:
                                 checkpoint_cursor = artifact_cursor
 
+                            # Save the estimate with the reply so the same
+                            # snapshot is available via SSE and chat history.
+                            try:
+                                context_usage = {
+                                    **(await agent.get_context_usage()),
+                                    "model": model_cfg.model,
+                                    "credential_id": model_cfg.credential_id,
+                                }
+                                reply_msg.metadata["context_usage"] = context_usage
+                                checkpoint_cursor = await publish_session_event(
+                                    self._message_bus,
+                                    session_id,
+                                    CustomEvent(
+                                        name="context_usage",
+                                        value={
+                                            "reply_id": reply_msg.id,
+                                            "usage": context_usage,
+                                        },
+                                    ).model_dump(mode="json"),
+                                )
+                            except Exception as exc:  # pylint: disable=broad-except
+                                logger.debug(
+                                    "Could not report context usage for %r: %s",
+                                    session_id,
+                                    exc,
+                                )
+
                     except Exception as e:  # pylint: disable=broad-except
                         # CancelledError is a BaseException, so interrupts are
                         # unaffected. The lock is already held here, so the
